@@ -27,7 +27,8 @@ initializeApp({
 const db = getFirestore();
 const messaging = getMessaging();
 
-const NOTIFICATION_CHANNEL = "examready_alerts_v2";
+const NOTIFICATION_CHANNEL =
+  "examready_alerts_v2";
 
 type OfficialSourceData = {
   name?: string;
@@ -43,6 +44,13 @@ type NoticeEntry = {
   url: string;
 };
 
+type ClassifiedNotice = {
+  category: string;
+  severity: "informational" | "critical";
+  confidence: number;
+  autoPublish: boolean;
+};
+
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -54,7 +62,9 @@ function noticeId(url: string): string {
     .slice(0, 32);
 }
 
-async function fetchHtml(url: string): Promise<string> {
+async function fetchHtml(
+  url: string,
+): Promise<string> {
   const controller = new AbortController();
 
   const timeout = setTimeout(() => {
@@ -90,7 +100,8 @@ function extractPublicNotices(
 ): NoticeEntry[] {
   const $ = cheerio.load(html);
 
-  const results = new Map<string, NoticeEntry>();
+  const results =
+    new Map<string, NoticeEntry>();
 
   $("a").each((_, element) => {
     const href = $(element).attr("href");
@@ -99,7 +110,8 @@ function extractPublicNotices(
       return;
     }
 
-    const title = normalizeText($(element).text());
+    const title =
+      normalizeText($(element).text());
 
     if (!title) {
       return;
@@ -108,12 +120,16 @@ function extractPublicNotices(
     let absoluteUrl: URL;
 
     try {
-      absoluteUrl = new URL(href, pageUrl);
+      absoluteUrl = new URL(
+        href,
+        pageUrl,
+      );
     } catch {
       return;
     }
 
-    const host = absoluteUrl.hostname.toLowerCase();
+    const host =
+      absoluteUrl.hostname.toLowerCase();
 
     const isOfficialDocument =
       host.endsWith("nta.nic.in") ||
@@ -124,17 +140,30 @@ function extractPublicNotices(
       return;
     }
 
-    const lowerTitle = title.toLowerCase();
+    const lowerTitle =
+      title.toLowerCase();
 
     const looksLikeNotice =
       lowerTitle.includes("jee") ||
-      lowerTitle.includes("joint entrance") ||
-      lowerTitle.includes("admit card") ||
-      lowerTitle.includes("answer key") ||
+      lowerTitle.includes(
+        "joint entrance",
+      ) ||
+      lowerTitle.includes(
+        "admit card",
+      ) ||
+      lowerTitle.includes(
+        "answer key",
+      ) ||
       lowerTitle.includes("result") ||
-      lowerTitle.includes("application") ||
-      lowerTitle.includes("examination city") ||
-      lowerTitle.includes("correction");
+      lowerTitle.includes(
+        "application",
+      ) ||
+      lowerTitle.includes(
+        "examination city",
+      ) ||
+      lowerTitle.includes(
+        "correction",
+      );
 
     if (!looksLikeNotice) {
       return;
@@ -153,107 +182,403 @@ function extractPublicNotices(
   return [...results.values()];
 }
 
+function cycleYear(
+  cycleId: string,
+): string | null {
+  const match =
+    cycleId.match(/(\d{4})$/);
+
+  return match?.[1] ?? null;
+}
+
 function noticeMatchesCycle(
   notice: NoticeEntry,
   cycleId: string,
 ): boolean {
-  const match = cycleId.match(/(\d{4})$/);
+  const year = cycleYear(cycleId);
 
-  if (!match) {
-    return true;
+  if (!year) {
+    return false;
   }
 
-  return notice.title.includes(match[1]);
+  return notice.title.includes(year);
+}
+
+function classifyNotice(
+  notice: NoticeEntry,
+): ClassifiedNotice {
+  const title =
+    notice.title.toLowerCase();
+
+  if (
+    title.includes("admit card")
+  ) {
+    return {
+      category: "admitCard",
+      severity: "critical",
+      confidence: 0.99,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    title.includes("result") &&
+    (
+      title.includes("declared") ||
+      title.includes("declaration") ||
+      title.includes("score")
+    )
+  ) {
+    return {
+      category: "result",
+      severity: "critical",
+      confidence: 0.99,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    title.includes("answer key")
+  ) {
+    return {
+      category: "answerKey",
+      severity: "informational",
+      confidence: 0.98,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    title.includes(
+      "examination city",
+    ) ||
+    title.includes(
+      "city intimation",
+    )
+  ) {
+    return {
+      category:
+        "examinationCityIntimation",
+      severity: "critical",
+      confidence: 0.98,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    title.includes("correction") &&
+    (
+      title.includes("window") ||
+      title.includes("facility")
+    )
+  ) {
+    return {
+      category: "correctionWindow",
+      severity: "critical",
+      confidence: 0.97,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    title.includes("application") &&
+    (
+      title.includes("extended") ||
+      title.includes("extension") ||
+      title.includes("deadline")
+    )
+  ) {
+    return {
+      category: "applicationDeadline",
+      severity: "critical",
+      confidence: 0.99,
+      autoPublish: true,
+    };
+  }
+
+  return {
+    category: "other",
+    severity: "informational",
+    confidence: 0.50,
+    autoPublish: false,
+  };
+}
+
+async function publishVerifiedNotice(
+  sourceDocument:
+    QueryDocumentSnapshot,
+  source: OfficialSourceData,
+  notice: NoticeEntry,
+  cycleId: string,
+  classification: ClassifiedNotice,
+): Promise<void> {
+  const updateId =
+    `${sourceDocument.id}_${notice.id}`;
+
+  const updateRef = db
+    .collection("examinationUpdates")
+    .doc(updateId);
+
+  const existing =
+    await updateRef.get();
+
+  if (existing.exists) {
+    return;
+  }
+
+  await updateRef.set({
+    cycleId,
+    title: notice.title,
+
+    body:
+      "A new verified official notice is available. " +
+      "Open ExamReady to view the official source.",
+
+    category:
+      classification.category,
+
+    severity:
+      classification.severity,
+
+    confidence:
+      classification.confidence,
+
+    verificationStatus:
+      "verified",
+
+    sourceIds: [
+      sourceDocument.id,
+    ],
+
+    sourceName:
+      source.name ??
+      sourceDocument.id,
+
+    sourceUrl:
+      source.url,
+
+    noticeUrl:
+      notice.url,
+
+    detectedAt:
+      FieldValue.serverTimestamp(),
+
+    publishedAt:
+      FieldValue.serverTimestamp(),
+
+    publishedAutomatically: true,
+
+    verificationMethod:
+      "officialSourceExactCycleYearAndKnownNoticeType",
+  });
+
+  console.log(
+    `Auto-published verified update: ${notice.title}`,
+  );
 }
 
 async function monitorNoticeSource(
-  sourceDocument: QueryDocumentSnapshot,
+  sourceDocument:
+    QueryDocumentSnapshot,
   source: OfficialSourceData,
 ): Promise<void> {
   if (!source.url) {
     return;
   }
 
-  const html = await fetchHtml(source.url);
+  const html =
+    await fetchHtml(source.url);
 
-  const notices = extractPublicNotices(
-    html,
-    source.url,
-  );
+  const notices =
+    extractPublicNotices(
+      html,
+      source.url,
+    );
 
   const seenCollection =
-    sourceDocument.ref.collection("seenNotices");
+    sourceDocument.ref.collection(
+      "seenNotices",
+    );
 
   const seenSnapshot =
     await seenCollection.get();
 
   const seenIds = new Set(
-    seenSnapshot.docs.map((document) => document.id),
+    seenSnapshot.docs.map(
+      (document) => document.id,
+    ),
   );
 
-  const isFirstRun = seenSnapshot.empty;
+  const isFirstRun =
+    seenSnapshot.empty;
 
-  let newRelevantNotices = 0;
+  let relevantCount = 0;
+  let autoPublishedCount = 0;
 
   for (const notice of notices) {
     if (seenIds.has(notice.id)) {
       continue;
     }
 
-    await seenCollection.doc(notice.id).set({
-      title: notice.title,
-      url: notice.url,
-      firstSeenAt: FieldValue.serverTimestamp(),
-      baseline: isFirstRun,
-    });
+    await seenCollection
+      .doc(notice.id)
+      .set({
+        title: notice.title,
+        url: notice.url,
+        firstSeenAt:
+          FieldValue.serverTimestamp(),
+        baseline: isFirstRun,
+      });
 
-    // First run creates a baseline.
-    // Existing notices must never generate alerts.
     if (isFirstRun) {
       continue;
     }
 
     const matchedCycleIds =
-      (source.cycleIds ?? []).filter(
-        (cycleId) =>
-          noticeMatchesCycle(notice, cycleId),
+      (source.cycleIds ?? [])
+        .filter(
+          (cycleId) =>
+            noticeMatchesCycle(
+              notice,
+              cycleId,
+            ),
+        );
+
+    if (
+      matchedCycleIds.length === 0
+    ) {
+      console.log(
+        `Ignoring notice for another cycle: ${notice.title}`,
       );
 
-    if (matchedCycleIds.length === 0) {
-      console.log(
-        `Ignoring unrelated notice: ${notice.title}`,
-      );
       continue;
     }
+
+    relevantCount++;
+
+    const classification =
+      classifyNotice(notice);
 
     const detectionId =
       `${sourceDocument.id}_${notice.id}`;
 
-    await db
-      .collection("sourceDetections")
-      .doc(detectionId)
-      .set(
+    const detectionRef = db
+      .collection(
+        "sourceDetections",
+      )
+      .doc(detectionId);
+
+    if (
+      classification.autoPublish &&
+      classification.confidence >=
+        0.97
+    ) {
+      for (
+        const cycleId
+        of matchedCycleIds
+      ) {
+        await publishVerifiedNotice(
+          sourceDocument,
+          source,
+          notice,
+          cycleId,
+          classification,
+        );
+      }
+
+      await detectionRef.set(
         {
-          sourceId: sourceDocument.id,
+          sourceId:
+            sourceDocument.id,
+
           sourceName:
-            source.name ?? sourceDocument.id,
-          sourceUrl: source.url,
-          noticeTitle: notice.title,
-          noticeUrl: notice.url,
-          cycleIds: matchedCycleIds,
+            source.name ??
+            sourceDocument.id,
+
+          sourceUrl:
+            source.url,
+
+          noticeTitle:
+            notice.title,
+
+          noticeUrl:
+            notice.url,
+
+          cycleIds:
+            matchedCycleIds,
+
           detectedAt:
-            FieldValue.serverTimestamp(),
+            FieldValue
+              .serverTimestamp(),
+
           verificationStatus:
-            "pendingVerification",
-          processingStatus: "needsReview",
+            "verified",
+
+          processingStatus:
+            "processed",
+
+          confidence:
+            classification
+              .confidence,
+
+          category:
+            classification
+              .category,
+
+          autoPublished: true,
         },
         {merge: true},
       );
 
-    newRelevantNotices++;
+      autoPublishedCount++;
+
+      continue;
+    }
+
+    await detectionRef.set(
+      {
+        sourceId:
+          sourceDocument.id,
+
+        sourceName:
+          source.name ??
+          sourceDocument.id,
+
+        sourceUrl:
+          source.url,
+
+        noticeTitle:
+          notice.title,
+
+        noticeUrl:
+          notice.url,
+
+        cycleIds:
+          matchedCycleIds,
+
+        detectedAt:
+          FieldValue
+            .serverTimestamp(),
+
+        verificationStatus:
+          "pendingVerification",
+
+        processingStatus:
+          "needsReview",
+
+        confidence:
+          classification.confidence,
+
+        category:
+          classification.category,
+
+        autoPublished: false,
+      },
+      {merge: true},
+    );
 
     console.log(
-      `Relevant notice detected: ${notice.title}`,
+      `Held for review: ${notice.title}`,
     );
   }
 
@@ -261,35 +586,53 @@ async function monitorNoticeSource(
     {
       lastCheckedAt:
         FieldValue.serverTimestamp(),
+
       status: "verified",
-      processingStatus: "processed",
-      noticeCount: notices.length,
+
+      processingStatus:
+        "processed",
+
+      noticeCount:
+        notices.length,
     },
     {merge: true},
   );
 
   console.log(
-    `${sourceDocument.id}: ${notices.length} notices, ` +
-      `${newRelevantNotices} new relevant notice(s).`,
+    `${sourceDocument.id}: ` +
+      `${notices.length} notices, ` +
+      `${relevantCount} new relevant, ` +
+      `${autoPublishedCount} auto-published.`,
   );
 }
 
-async function monitorOfficialSources(): Promise<void> {
+async function monitorOfficialSources():
+  Promise<void> {
   const sources = await db
     .collection("officialSources")
-    .where("enabled", "==", true)
+    .where(
+      "enabled",
+      "==",
+      true,
+    )
     .get();
 
   console.log(
     `Checking ${sources.size} official source(s).`,
   );
 
-  for (const sourceDocument of sources.docs) {
+  for (
+    const sourceDocument
+    of sources.docs
+  ) {
     const source =
       sourceDocument.data() as OfficialSourceData;
 
     try {
-      if (source.type === "notification") {
+      if (
+        source.type ===
+        "notification"
+      ) {
         await monitorNoticeSource(
           sourceDocument,
           source,
@@ -298,9 +641,13 @@ async function monitorOfficialSources(): Promise<void> {
         await sourceDocument.ref.set(
           {
             lastCheckedAt:
-              FieldValue.serverTimestamp(),
+              FieldValue
+                .serverTimestamp(),
+
             status: "verified",
-            processingStatus: "processed",
+
+            processingStatus:
+              "processed",
           },
           {merge: true},
         );
@@ -314,9 +661,14 @@ async function monitorOfficialSources(): Promise<void> {
       await sourceDocument.ref.set(
         {
           lastCheckedAt:
-            FieldValue.serverTimestamp(),
-          status: "sourceUnavailable",
-          processingStatus: "failed",
+            FieldValue
+              .serverTimestamp(),
+
+          status:
+            "sourceUnavailable",
+
+          processingStatus:
+            "failed",
         },
         {merge: true},
       );
@@ -324,9 +676,12 @@ async function monitorOfficialSources(): Promise<void> {
   }
 }
 
-async function notifyVerifiedUpdates(): Promise<void> {
+async function notifyVerifiedUpdates():
+  Promise<void> {
   const updates = await db
-    .collection("examinationUpdates")
+    .collection(
+      "examinationUpdates",
+    )
     .where(
       "verificationStatus",
       "==",
@@ -335,8 +690,12 @@ async function notifyVerifiedUpdates(): Promise<void> {
     .limit(100)
     .get();
 
-  for (const updateDocument of updates.docs) {
-    const update = updateDocument.data();
+  for (
+    const updateDocument
+    of updates.docs
+  ) {
+    const update =
+      updateDocument.data();
 
     if (
       !update.publishedAt ||
@@ -346,12 +705,19 @@ async function notifyVerifiedUpdates(): Promise<void> {
     }
 
     const cycleId =
-      update.cycleId as string | undefined;
+      update.cycleId as
+        | string
+        | undefined;
 
     const title =
-      update.title as string | undefined;
+      update.title as
+        | string
+        | undefined;
 
-    if (!cycleId || !title) {
+    if (
+      !cycleId ||
+      !title
+    ) {
       continue;
     }
 
@@ -359,40 +725,61 @@ async function notifyVerifiedUpdates(): Promise<void> {
       .collection("users")
       .get();
 
-    const tokens = new Set<string>();
+    const tokens =
+      new Set<string>();
 
-    for (const user of users.docs) {
-      const selectedExam = await user.ref
-        .collection("examinations")
-        .doc(cycleId)
-        .get();
-
-      if (!selectedExam.exists) {
-        continue;
-      }
-
-      const preferences = await user.ref
-        .collection("settings")
-        .doc("notifications")
-        .get();
+    for (
+      const user of users.docs
+    ) {
+      const selectedExam =
+        await user.ref
+          .collection(
+            "examinations",
+          )
+          .doc(cycleId)
+          .get();
 
       if (
-        preferences.data()
-          ?.officialUpdatesEnabled === false
+        !selectedExam.exists
       ) {
         continue;
       }
 
-      const tokenDocuments = await user.ref
-        .collection("fcmTokens")
-        .get();
+      const preferences =
+        await user.ref
+          .collection(
+            "settings",
+          )
+          .doc(
+            "notifications",
+          )
+          .get();
 
-      for (const tokenDocument of
-        tokenDocuments.docs) {
+      if (
+        preferences.data()
+          ?.officialUpdatesEnabled ===
+        false
+      ) {
+        continue;
+      }
+
+      const tokenDocuments =
+        await user.ref
+          .collection(
+            "fcmTokens",
+          )
+          .get();
+
+      for (
+        const tokenDocument
+        of tokenDocuments.docs
+      ) {
         const token =
-          tokenDocument.data().token as
-            | string
-            | undefined;
+          tokenDocument
+            .data()
+            .token as
+              | string
+              | undefined;
 
         if (token) {
           tokens.add(token);
@@ -400,53 +787,72 @@ async function notifyVerifiedUpdates(): Promise<void> {
       }
     }
 
-    const allTokens = [...tokens];
+    const allTokens =
+      [...tokens];
 
     const body =
-      typeof update.body === "string" &&
-      update.body.trim().length > 0 ?
+      typeof update.body ===
+        "string" &&
+      update.body
+        .trim()
+        .length > 0 ?
         update.body :
         "A verified official exam update is available.";
 
     for (
       let index = 0;
-      index < allTokens.length;
+      index <
+        allTokens.length;
       index += 500
     ) {
-      const batch = allTokens.slice(
-        index,
-        index + 500,
-      );
+      const batch =
+        allTokens.slice(
+          index,
+          index + 500,
+        );
 
-      if (batch.length === 0) {
+      if (
+        batch.length === 0
+      ) {
         continue;
       }
 
-      await messaging.sendEachForMulticast({
-        tokens: batch,
-        notification: {
-          title,
-          body,
-        },
-        data: {
-          type: "examinationUpdate",
-          updateId: updateDocument.id,
-          cycleId,
-        },
-        android: {
-          priority: "high",
+      await messaging
+        .sendEachForMulticast({
+          tokens: batch,
+
           notification: {
-            channelId:
-              NOTIFICATION_CHANNEL,
+            title,
+            body,
           },
-        },
-      });
+
+          data: {
+            type:
+              "examinationUpdate",
+
+            updateId:
+              updateDocument.id,
+
+            cycleId,
+          },
+
+          android: {
+            priority: "high",
+
+            notification: {
+              channelId:
+                NOTIFICATION_CHANNEL,
+            },
+          },
+        });
     }
 
     await updateDocument.ref.set(
       {
         notificationSentAt:
-          FieldValue.serverTimestamp(),
+          FieldValue
+            .serverTimestamp(),
+
         notificationRecipientCount:
           allTokens.length,
       },
@@ -460,16 +866,26 @@ async function notifyVerifiedUpdates(): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  console.log("ExamReady automation started.");
+async function main():
+  Promise<void> {
+  console.log(
+    "ExamReady automation started.",
+  );
 
   await monitorOfficialSources();
+
   await notifyVerifiedUpdates();
 
-  console.log("ExamReady automation finished.");
+  console.log(
+    "ExamReady automation finished.",
+  );
 }
 
 main().catch((error) => {
-  console.error("ExamReady automation failed:", error);
+  console.error(
+    "ExamReady automation failed:",
+    error,
+  );
+
   process.exitCode = 1;
 });

@@ -929,6 +929,870 @@ function classifyNotice(
   };
 }
 
+const GATE_2027_CYCLE_ID =
+  "gate-2027";
+
+const GATE_2027_IMPORTANT_DATES_SOURCE =
+  "gate-2027-important-dates";
+
+const GATE_2027_ELIGIBILITY_SOURCE =
+  "gate-2027-eligibility";
+
+const GATE_2027_DOCUMENTS_SOURCE =
+  "gate-2027-required-documents";
+
+const GATE_2027_IMPORTANT_DATES_URL =
+  "https://gate2027.iitm.ac.in/important_dates";
+
+const GATE_2027_ELIGIBILITY_URL =
+  "https://gate2027.iitm.ac.in/eligibility_criteria";
+
+const GATE_2027_DOCUMENTS_URL =
+  "https://gate2027.iitm.ac.in/required_documents";
+
+type ImportedImportantDate = {
+  type: string;
+  value: Date;
+  sourceIds: string[];
+  label: string;
+};
+
+type ImportedEligibility = {
+  id: string;
+  description: string;
+  sourceIds: string[];
+  conditionKey: null;
+};
+
+const gateMonthNumbers:
+  Record<string, number> = {
+    january: 0,
+    february: 1,
+    march: 2,
+    april: 3,
+    may: 4,
+    june: 5,
+    july: 6,
+    august: 7,
+    september: 8,
+    october: 9,
+    november: 10,
+    december: 11,
+  };
+
+function datesFromOfficialText(
+  value: string,
+): Date[] {
+  const cleaned =
+    value.replace(
+      /(\d+)(st|nd|rd|th)/gi,
+      "$1",
+    );
+
+  const pattern =
+    new RegExp(
+      "\\b(\\d{1,2})\\s+" +
+      "(January|February|March|April|May|June|" +
+      "July|August|September|October|November|" +
+      "December)\\s+" +
+      "(20\\d{2})\\b",
+      "gi",
+    );
+
+  const results: Date[] = [];
+
+  let match:
+    RegExpExecArray | null;
+
+  while (
+    (
+      match =
+        pattern.exec(cleaned)
+    ) !== null
+  ) {
+    const day =
+      Number(match[1]);
+
+    const month =
+      gateMonthNumbers[
+        match[2].toLowerCase()
+      ];
+
+    const year =
+      Number(match[3]);
+
+    if (
+      month === undefined ||
+      day < 1 ||
+      day > 31
+    ) {
+      continue;
+    }
+
+    results.push(
+      new Date(
+        Date.UTC(
+          year,
+          month,
+          day,
+        ),
+      ),
+    );
+  }
+
+  return results;
+}
+
+function gateDateType(
+  activity: string,
+): string {
+  const text =
+    searchableText(activity);
+
+  if (
+    text.includes("opening date") &&
+    (
+      text.includes("application") ||
+      text.includes("goaps")
+    )
+  ) {
+    return "applicationStart";
+  }
+
+  if (
+    text.includes("closing date") &&
+    text.includes("registration")
+  ) {
+    return "applicationDeadline";
+  }
+
+  if (
+    text.includes("opening date") &&
+    (
+      text.includes("rectification") ||
+      text.includes("correction")
+    )
+  ) {
+    return "correctionWindowStart";
+  }
+
+  if (
+    text.includes("closing date") &&
+    (
+      text.includes("rectification") ||
+      text.includes("correction")
+    )
+  ) {
+    return "correctionWindowEnd";
+  }
+
+  if (
+    text.includes("admit card")
+  ) {
+    return "admitCardRelease";
+  }
+
+  if (
+    text.includes("examination")
+  ) {
+    return "examination";
+  }
+
+  if (
+    text.includes("result")
+  ) {
+    return "resultRelease";
+  }
+
+  return "other";
+}
+
+function parseGateImportantDates(
+  html: string,
+): ImportedImportantDate[] {
+  const $ =
+    cheerio.load(html);
+
+  const results:
+    ImportedImportantDate[] = [];
+
+  const seen =
+    new Set<string>();
+
+  let currentActivity = "";
+
+  const addDates = (
+    activity: string,
+    dateText: string,
+  ): void => {
+    if (!activity) {
+      return;
+    }
+
+    const dates =
+      datesFromOfficialText(
+        dateText,
+      );
+
+    const type =
+      gateDateType(
+        activity,
+      );
+
+    for (
+      const date
+      of dates
+    ) {
+      const identity =
+        `${type}|` +
+        `${date.toISOString()}|` +
+        activity;
+
+      if (
+        seen.has(identity)
+      ) {
+        continue;
+      }
+
+      seen.add(identity);
+
+      results.push({
+        type,
+        value: date,
+        sourceIds: [
+          GATE_2027_IMPORTANT_DATES_SOURCE,
+        ],
+        label: activity,
+      });
+    }
+  };
+
+  $("table tr").each(
+    (_, row) => {
+      const cells =
+        $(row).find("td");
+
+      if (
+        cells.length === 0
+      ) {
+        return;
+      }
+
+      const cleanedCells =
+        cells
+          .map(
+            (_, cell) => {
+              const clone =
+                $(cell).clone();
+
+              clone
+                .find(
+                  "s, del, strike, " +
+                  "[style*=\"line-through\"]",
+                )
+                .remove();
+
+              return normalizeText(
+                clone.text(),
+              );
+            },
+          )
+          .get();
+
+      if (
+        cleanedCells.length >= 3
+      ) {
+        const activity =
+          cleanedCells[0];
+
+        const dateText =
+          cleanedCells[1];
+
+        if (activity) {
+          currentActivity =
+            activity;
+        }
+
+        addDates(
+          currentActivity,
+          dateText,
+        );
+
+        return;
+      }
+
+      if (
+        cleanedCells.length === 2
+      ) {
+        const first =
+          cleanedCells[0];
+
+        const second =
+          cleanedCells[1];
+
+        const firstDates =
+          datesFromOfficialText(
+            first,
+          );
+
+        /*
+         * GATE's examination schedule uses
+         * continuation rows:
+         *
+         * GATE 2027 Examinations | 6, 7 Feb | ...
+         *                         | 13,14 Feb | ...
+         *                         | 20,21 Feb | ...
+         *
+         * In those continuation rows the first
+         * cell is another date block, not a new
+         * activity name.
+         */
+        if (
+          currentActivity &&
+          firstDates.length > 0
+        ) {
+          addDates(
+            currentActivity,
+            first,
+          );
+
+          return;
+        }
+
+        if (first) {
+          currentActivity =
+            first;
+        }
+
+        addDates(
+          currentActivity,
+          second,
+        );
+      }
+    },
+  );
+
+  return results;
+}
+function parseGateEligibility(
+  html: string,
+): ImportedEligibility[] {
+  const $ =
+    cheerio.load(html);
+
+  const results:
+    ImportedEligibility[] = [];
+
+  const descriptions =
+    new Set<string>();
+
+  $("p").each(
+    (_, paragraph) => {
+      const text =
+        normalizeText(
+          $(paragraph).text(),
+        );
+
+      const lower =
+        text.toLowerCase();
+
+      if (
+        lower.includes(
+          "candidates who are currently studying",
+        ) &&
+        lower.includes(
+          "eligible to appear",
+        )
+      ) {
+        descriptions.add(text);
+      }
+    },
+  );
+
+  $("table tr").each(
+    (_, row) => {
+      const cells =
+        $(row).find("td");
+
+      if (
+        cells.length < 2
+      ) {
+        return;
+      }
+
+      const values =
+        cells
+          .map(
+            (_, cell) =>
+              normalizeText(
+                $(cell).text(),
+              ),
+          )
+          .get()
+          .filter(
+            (value) =>
+              value.length > 0,
+          );
+
+      if (
+        values.length < 2
+      ) {
+        return;
+      }
+
+      const first =
+        values[0]
+          .toLowerCase();
+
+      if (
+        first.includes(
+          "qualifying degree",
+        )
+      ) {
+        return;
+      }
+
+      const description =
+        normalizeText(
+          values.join(
+            " â€” ",
+          ),
+        );
+
+      if (
+        description.length >= 15
+      ) {
+        descriptions.add(
+          description,
+        );
+      }
+    },
+  );
+
+  for (
+    const description
+    of descriptions
+  ) {
+    results.push({
+      id:
+        "gate-2027-eligibility-" +
+        noticeId(
+          description,
+        ).slice(
+          0,
+          16,
+        ),
+
+      description,
+
+      sourceIds: [
+        GATE_2027_ELIGIBILITY_SOURCE,
+      ],
+
+      conditionKey: null,
+    });
+  }
+
+  return results;
+}
+
+function parseGateDocumentLabels(
+  html: string,
+): string[] {
+  const $ =
+    cheerio.load(html);
+
+  const headings =
+    $(
+      "h1, h2, h3, h4, h5, h6",
+    );
+
+  const heading =
+    headings
+      .filter(
+        (_, element) => {
+          const text =
+            normalizeText(
+              $(element).text(),
+            ).toLowerCase();
+
+          return (
+            text ===
+            "documents required"
+          );
+        },
+      )
+      .first();
+
+  if (
+    heading.length === 0
+  ) {
+    return [];
+  }
+
+  const results =
+    new Set<string>();
+
+  let current =
+    heading.next();
+
+  while (
+    current.length > 0
+  ) {
+    if (
+      current.is(
+        "h1, h2, h3, h4, h5, h6",
+      )
+    ) {
+      break;
+    }
+
+    const lists =
+      current.is(
+        "ul, ol",
+      ) ?
+        current :
+        current.find(
+          "ul, ol",
+        ).first();
+
+    lists
+      .children("li")
+      .each(
+        (_, item) => {
+          const clone =
+            $(item).clone();
+
+          clone
+            .find(
+              "ul, ol",
+            )
+            .remove();
+
+          const label =
+            normalizeText(
+              clone.text(),
+            );
+
+          if (
+            label.length >= 8
+          ) {
+            results.add(
+              label,
+            );
+          }
+        },
+      );
+
+    current =
+      current.next();
+  }
+
+  return [
+    ...results,
+  ];
+}
+
+async function ensureGate2027Sources():
+  Promise<void> {
+  const sources = [
+    {
+      id:
+        GATE_2027_IMPORTANT_DATES_SOURCE,
+
+      name:
+        "GATE 2027 Official Important Dates",
+
+      url:
+        GATE_2027_IMPORTANT_DATES_URL,
+    },
+    {
+      id:
+        GATE_2027_ELIGIBILITY_SOURCE,
+
+      name:
+        "GATE 2027 Official Eligibility",
+
+      url:
+        GATE_2027_ELIGIBILITY_URL,
+    },
+    {
+      id:
+        GATE_2027_DOCUMENTS_SOURCE,
+
+      name:
+        "GATE 2027 Official Required Documents",
+
+      url:
+        GATE_2027_DOCUMENTS_URL,
+    },
+  ];
+
+  for (
+    const source
+    of sources
+  ) {
+    await db
+      .collection(
+        "officialSources",
+      )
+      .doc(
+        source.id,
+      )
+      .set(
+        {
+          name:
+            source.name,
+
+          url:
+            source.url,
+
+          type:
+            "website",
+
+          enabled:
+            true,
+
+          cycleIds: [
+            GATE_2027_CYCLE_ID,
+          ],
+
+          status:
+            "verified",
+
+          processingStatus:
+            "processed",
+
+          confidence:
+            1.0,
+
+          lastCheckedAt:
+            FieldValue
+              .serverTimestamp(),
+
+          lastVerifiedAt:
+            FieldValue
+              .serverTimestamp(),
+        },
+        {
+          merge: true,
+        },
+      );
+  }
+}
+
+async function syncGateChecklist(
+  labels: string[],
+): Promise<string[]> {
+  const managedBy =
+    "gate2027OfficialSync";
+
+  const ids =
+    labels.map(
+      (label) =>
+        "gate-2027-document-" +
+        noticeId(
+          label,
+        ).slice(
+          0,
+          16,
+        ),
+    );
+
+  const activeIds =
+    new Set(ids);
+
+  for (
+    let index = 0;
+    index < labels.length;
+    index++
+  ) {
+    await db
+      .collection(
+        "checklistRequirements",
+      )
+      .doc(
+        ids[index],
+      )
+      .set(
+        {
+          cycleId:
+            GATE_2027_CYCLE_ID,
+
+          label:
+            labels[index],
+
+          conditionKey:
+            null,
+
+          sourceIds: [
+            GATE_2027_DOCUMENTS_SOURCE,
+          ],
+
+          managedBy,
+
+          updatedAt:
+            FieldValue
+              .serverTimestamp(),
+        },
+        {
+          merge: true,
+        },
+      );
+  }
+
+  const existing =
+    await db
+      .collection(
+        "checklistRequirements",
+      )
+      .where(
+        "cycleId",
+        "==",
+        GATE_2027_CYCLE_ID,
+      )
+      .get();
+
+  for (
+    const document
+    of existing.docs
+  ) {
+    const data =
+      document.data();
+
+    if (
+      data.managedBy === managedBy &&
+      !activeIds.has(
+        document.id,
+      )
+    ) {
+      await document.ref.delete();
+    }
+  }
+
+  return ids;
+}
+
+async function syncGate2027Information():
+  Promise<void> {
+  console.log(
+    "Syncing structured GATE 2027 information.",
+  );
+
+  const [
+    importantDatesHtml,
+    eligibilityHtml,
+    documentsHtml,
+  ] =
+    await Promise.all([
+      fetchHtml(
+        GATE_2027_IMPORTANT_DATES_URL,
+      ),
+
+      fetchHtml(
+        GATE_2027_ELIGIBILITY_URL,
+      ),
+
+      fetchHtml(
+        GATE_2027_DOCUMENTS_URL,
+      ),
+    ]);
+
+  const importantDates =
+    parseGateImportantDates(
+      importantDatesHtml,
+    );
+
+  const eligibility =
+    parseGateEligibility(
+      eligibilityHtml,
+    );
+
+  const documentLabels =
+    parseGateDocumentLabels(
+      documentsHtml,
+    );
+
+  /*
+   * Fail closed.
+   * Never erase good Firestore data because an
+   * official site's HTML structure temporarily
+   * changed.
+   */
+  if (
+    importantDates.length < 13
+  ) {
+    throw new Error(
+      "GATE date parser returned too few dates: " +
+      importantDates.length,
+    );
+  }
+
+  if (
+    eligibility.length < 2
+  ) {
+    throw new Error(
+      "GATE eligibility parser returned too few items: " +
+      eligibility.length,
+    );
+  }
+
+  if (
+    documentLabels.length < 2
+  ) {
+    throw new Error(
+      "GATE document parser returned too few items: " +
+      documentLabels.length,
+    );
+  }
+
+  await ensureGate2027Sources();
+
+  const documentRequirementIds =
+    await syncGateChecklist(
+      documentLabels,
+    );
+
+  await db
+    .collection(
+      "examinationInformation",
+    )
+    .doc(
+      GATE_2027_CYCLE_ID,
+    )
+    .set(
+      {
+        importantDates,
+
+        eligibility,
+
+        documentRequirementIds,
+
+        informationStatus:
+          "verified",
+
+        informationSourceIds: [
+          GATE_2027_IMPORTANT_DATES_SOURCE,
+          GATE_2027_ELIGIBILITY_SOURCE,
+          GATE_2027_DOCUMENTS_SOURCE,
+        ],
+
+        lastInformationSyncAt:
+          FieldValue
+            .serverTimestamp(),
+      },
+      {
+        merge: true,
+      },
+    );
+
+  console.log(
+    "GATE 2027 information synced: " +
+    `${importantDates.length} date(s), ` +
+    `${eligibility.length} eligibility item(s), ` +
+    `${documentRequirementIds.length} document item(s).`,
+  );
+}
 async function publishVerifiedNotice(
   sourceDocument:
     QueryDocumentSnapshot,
@@ -1692,6 +2556,8 @@ async function main():
   );
 
   await monitorOfficialSources();
+
+  await syncGate2027Information();
 
   await notifyVerifiedUpdates();
 

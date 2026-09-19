@@ -950,6 +950,12 @@ const GATE_2027_ELIGIBILITY_URL =
 const GATE_2027_DOCUMENTS_URL =
   "https://gate2027.iitm.ac.in/required_documents";
 
+const GATE_2027_FEES_SOURCE =
+  "gate-2027-application-fees";
+
+const GATE_2027_FEES_URL =
+  "https://gate2027.iitm.ac.in/application_fees";
+
 type ImportedImportantDate = {
   type: string;
   value: Date;
@@ -1274,6 +1280,152 @@ function parseGateImportantDates(
 
   return results;
 }
+function parseGateFees(
+  html: string,
+): Array<Record<string, unknown>> {
+  const $ =
+    cheerio.load(html);
+
+  const results:
+    Array<Record<string, unknown>> = [];
+
+  $("table tbody tr").each(
+    (_, row) => {
+      const cells =
+        $(row).find("td");
+
+      if (
+        cells.length < 5
+      ) {
+        return;
+      }
+
+      const category =
+        normalizeText(
+          $(cells[0]).text(),
+        );
+
+      const regularOnePaper =
+        Number(
+          normalizeText(
+            $(cells[1]).text(),
+          ).replace(
+            /[^0-9]/g,
+            "",
+          ),
+        );
+
+      const regularTwoPaper =
+        Number(
+          normalizeText(
+            $(cells[2]).text(),
+          ).replace(
+            /[^0-9]/g,
+            "",
+          ),
+        );
+
+      const extendedOnePaper =
+        Number(
+          normalizeText(
+            $(cells[3]).text(),
+          ).replace(
+            /[^0-9]/g,
+            "",
+          ),
+        );
+
+      const extendedTwoPaper =
+        Number(
+          normalizeText(
+            $(cells[4]).text(),
+          ).replace(
+            /[^0-9]/g,
+            "",
+          ),
+        );
+
+      const amounts = [
+        regularOnePaper,
+        regularTwoPaper,
+        extendedOnePaper,
+        extendedTwoPaper,
+      ];
+
+      if (
+        !category ||
+        amounts.some(
+          (amount) =>
+            !Number.isFinite(amount) ||
+            amount <= 0,
+        )
+      ) {
+        return;
+      }
+
+      results.push(
+        {
+          label:
+            "Regular registration fee - One paper",
+
+          amountInr:
+            regularOnePaper,
+
+          sourceIds: [
+            GATE_2027_FEES_SOURCE,
+          ],
+
+          categoryLabel:
+            category,
+        },
+        {
+          label:
+            "Regular registration fee - Two papers",
+
+          amountInr:
+            regularTwoPaper,
+
+          sourceIds: [
+            GATE_2027_FEES_SOURCE,
+          ],
+
+          categoryLabel:
+            category,
+        },
+        {
+          label:
+            "Extended registration fee - One paper",
+
+          amountInr:
+            extendedOnePaper,
+
+          sourceIds: [
+            GATE_2027_FEES_SOURCE,
+          ],
+
+          categoryLabel:
+            category,
+        },
+        {
+          label:
+            "Extended registration fee - Two papers",
+
+          amountInr:
+            extendedTwoPaper,
+
+          sourceIds: [
+            GATE_2027_FEES_SOURCE,
+          ],
+
+          categoryLabel:
+            category,
+        },
+      );
+    },
+  );
+
+  return results;
+}
 function parseGateEligibility(
   html: string,
 ): ImportedEligibility[] {
@@ -1355,7 +1507,7 @@ function parseGateEligibility(
       const description =
         normalizeText(
           values.join(
-            " â€” ",
+            " ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ",
           ),
         );
 
@@ -1526,6 +1678,16 @@ async function ensureGate2027Sources():
       url:
         GATE_2027_DOCUMENTS_URL,
     },
+    {
+      id:
+        GATE_2027_FEES_SOURCE,
+
+      name:
+        "GATE 2027 Official Application Fees",
+
+      url:
+        GATE_2027_FEES_URL,
+    },
   ];
 
   for (
@@ -1683,6 +1845,7 @@ async function syncGate2027Information():
     importantDatesHtml,
     eligibilityHtml,
     documentsHtml,
+    feesHtml,
   ] =
     await Promise.all([
       fetchHtml(
@@ -1695,6 +1858,10 @@ async function syncGate2027Information():
 
       fetchHtml(
         GATE_2027_DOCUMENTS_URL,
+      ),
+
+      fetchHtml(
+        GATE_2027_FEES_URL,
       ),
     ]);
 
@@ -1711,6 +1878,11 @@ async function syncGate2027Information():
   const documentLabels =
     parseGateDocumentLabels(
       documentsHtml,
+    );
+
+  const fees =
+    parseGateFees(
+      feesHtml,
     );
 
   /*
@@ -1746,6 +1918,15 @@ async function syncGate2027Information():
     );
   }
 
+  if (
+    fees.length !== 8
+  ) {
+    throw new Error(
+      "GATE fee parser returned unexpected item count: " +
+      fees.length,
+    );
+  }
+
   await ensureGate2027Sources();
 
   const documentRequirementIds =
@@ -1764,6 +1945,8 @@ async function syncGate2027Information():
       {
         importantDates,
 
+        fees,
+
         eligibility,
 
         documentRequirementIds,
@@ -1775,6 +1958,7 @@ async function syncGate2027Information():
           GATE_2027_IMPORTANT_DATES_SOURCE,
           GATE_2027_ELIGIBILITY_SOURCE,
           GATE_2027_DOCUMENTS_SOURCE,
+          GATE_2027_FEES_SOURCE,
         ],
 
         lastInformationSyncAt:
@@ -1789,6 +1973,7 @@ async function syncGate2027Information():
   console.log(
     "GATE 2027 information synced: " +
     `${importantDates.length} date(s), ` +
+    `${fees.length} fee item(s), ` +
     `${eligibility.length} eligibility item(s), ` +
     `${documentRequirementIds.length} document item(s).`,
   );

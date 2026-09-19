@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -25,47 +25,71 @@ class FirestoreExaminationUpdateRepository
     StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
         updatesSubscription;
 
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+        dismissedSubscription;
+
+    Set<String> cycleIds = <String>{};
+    Set<String> dismissedIds = <String>{};
+    List<ExaminationUpdate> allUpdates =
+        const <ExaminationUpdate>[];
+
+    void emit() {
+      final visible = allUpdates
+          .where(
+            (update) =>
+                cycleIds.contains(update.cycleId) &&
+                !dismissedIds.contains(update.id),
+          )
+          .toList()
+        ..sort(
+          (a, b) =>
+              b.detectedAt.compareTo(a.detectedAt),
+        );
+
+      controller.add(visible);
+    }
+
     examinationsSubscription = _firestore
         .collection('users')
         .doc(userId)
         .collection('examinations')
         .snapshots()
         .listen(
-      (examinationsSnapshot) {
-        final cycleIds = examinationsSnapshot.docs
+      (snapshot) {
+        cycleIds = snapshot.docs
             .map((document) => document.id)
             .toSet();
 
-        updatesSubscription?.cancel();
+        emit();
+      },
+      onError: controller.addError,
+    );
 
-        if (cycleIds.isEmpty) {
-          controller.add(
-            const <ExaminationUpdate>[],
-          );
-          return;
-        }
+    dismissedSubscription = _firestore
+        .collection('users')
+        .doc(userId)
+        .collection('dismissedUpdates')
+        .snapshots()
+        .listen(
+      (snapshot) {
+        dismissedIds = snapshot.docs
+            .map((document) => document.id)
+            .toSet();
 
-        updatesSubscription = _firestore
-            .collection('examinationUpdates')
-            .snapshots()
-            .listen(
-          (updatesSnapshot) {
-            final updates = updatesSnapshot.docs
-                .map(_fromDocument)
-                .where(
-                  (update) =>
-                      cycleIds.contains(update.cycleId),
-                )
-                .toList()
-              ..sort(
-                (a, b) =>
-                    b.detectedAt.compareTo(a.detectedAt),
-              );
+        emit();
+      },
+      onError: controller.addError,
+    );
 
-            controller.add(updates);
-          },
-          onError: controller.addError,
-        );
+    updatesSubscription = _firestore
+        .collection('examinationUpdates')
+        .snapshots()
+        .listen(
+      (snapshot) {
+        allUpdates =
+            snapshot.docs.map(_fromDocument).toList();
+
+        emit();
       },
       onError: controller.addError,
     );
@@ -73,9 +97,40 @@ class FirestoreExaminationUpdateRepository
     controller.onCancel = () async {
       await examinationsSubscription?.cancel();
       await updatesSubscription?.cancel();
+      await dismissedSubscription?.cancel();
     };
 
     return controller.stream;
+  }
+
+  @override
+  Future<void> dismissUpdate({
+    required String userId,
+    required String updateId,
+  }) {
+    return _firestore
+        .collection('users')
+        .doc(userId)
+        .collection('dismissedUpdates')
+        .doc(updateId)
+        .set({
+      'dismissedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  Future<void> markUpdateRead({
+    required String userId,
+    required String updateId,
+  }) {
+    return _firestore
+        .collection('users')
+        .doc(userId)
+        .collection('readUpdates')
+        .doc(updateId)
+        .set({
+      'readAt': FieldValue.serverTimestamp(),
+    });
   }
 
   ExaminationUpdate _fromDocument(
@@ -120,9 +175,7 @@ class FirestoreExaminationUpdateRepository
     );
   }
 
-  UpdateSeverity _parseSeverity(
-    Object? value,
-  ) {
+  UpdateSeverity _parseSeverity(Object? value) {
     if (value is String) {
       for (final severity in UpdateSeverity.values) {
         if (severity.name == value) {
@@ -148,9 +201,7 @@ class FirestoreExaminationUpdateRepository
     return VerificationStatus.pendingVerification;
   }
 
-  String? _optionalString(
-    Object? value,
-  ) {
+  String? _optionalString(Object? value) {
     if (value is! String) {
       return null;
     }
@@ -160,9 +211,7 @@ class FirestoreExaminationUpdateRepository
     return text.isEmpty ? null : text;
   }
 
-  Uri? _parseUri(
-    Object? value,
-  ) {
+  Uri? _parseUri(Object? value) {
     if (value is! String) {
       return null;
     }
@@ -188,9 +237,7 @@ class FirestoreExaminationUpdateRepository
     return uri;
   }
 
-  double? _parseDouble(
-    Object? value,
-  ) {
+  double? _parseDouble(Object? value) {
     if (value is num) {
       return value.toDouble();
     }

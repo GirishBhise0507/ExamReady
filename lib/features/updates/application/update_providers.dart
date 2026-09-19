@@ -20,14 +20,65 @@ final examinationUpdateRepositoryProvider =
 
 final studentUpdatesProvider =
     StreamProvider<List<ExaminationUpdate>>((ref) {
-  final session = ref.watch(authSessionProvider).valueOrNull;
-  final userId = session?.userId;
+  final session =
+      ref.watch(authSessionProvider).valueOrNull;
+
+  final userId =
+      session?.userId;
 
   if (userId == null) {
-    return Stream.value(const <ExaminationUpdate>[]);
+    return Stream.value(
+      const <ExaminationUpdate>[],
+    );
   }
 
   return ref
       .watch(examinationUpdateRepositoryProvider)
       .watchForStudent(userId);
+});
+
+final studentReadUpdateIdsProvider =
+    StreamProvider<Set<String>>((ref) {
+  final session =
+      ref.watch(authSessionProvider).valueOrNull;
+
+  final userId =
+      session?.userId;
+
+  if (userId == null) {
+    return Stream.value(
+      const <String>{},
+    );
+  }
+
+  return ref
+      .watch(updatesFirestoreProvider)
+      .collection('users')
+      .doc(userId)
+      .collection('readUpdates')
+      .snapshots()
+      .map(
+        (snapshot) => snapshot.docs
+            .map(
+              (document) => document.id,
+            )
+            .toSet(),
+      );
+});
+
+final studentUnreadUpdateCountProvider =
+    Provider<int>((ref) {
+  final updates =
+      ref.watch(studentUpdatesProvider).valueOrNull ??
+      const <ExaminationUpdate>[];
+
+  final readIds =
+      ref.watch(studentReadUpdateIdsProvider).valueOrNull ??
+      const <String>{};
+
+  return updates
+      .where(
+        (update) => !readIds.contains(update.id),
+      )
+      .length;
 });

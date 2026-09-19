@@ -1,167 +1,233 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/navigation/app_destination.dart';
 import '../../authentication/application/authentication_providers.dart';
 import '../../examinations/presentation/my_exams_screen.dart';
 import '../../profile/presentation/profile_screen.dart';
+import '../../updates/application/update_providers.dart';
 import '../../updates/presentation/updates_view.dart';
+import 'home_dashboard.dart';
 
 class MainAppShell extends ConsumerStatefulWidget {
   const MainAppShell({super.key});
 
   @override
-  ConsumerState<MainAppShell> createState() => _MainAppShellState();
+  ConsumerState<MainAppShell> createState() =>
+      _MainAppShellState();
 }
 
-class _MainAppShellState extends ConsumerState<MainAppShell> {
-  AppDestination _destination = AppDestination.home;
+class _MainAppShellState
+    extends ConsumerState<MainAppShell> {
+  AppDestination _destination =
+      AppDestination.home;
 
   @override
   Widget build(BuildContext context) {
-    final selectedIndex = AppDestination.values.indexOf(_destination);
+    final selectedIndex =
+        AppDestination.values
+            .indexOf(_destination);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_titleForDestination(_destination)),
-      ),
-      body: _bodyForDestination(_destination),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: selectedIndex,
-        onDestinationSelected: (index) {
+    final updateCount =
+        ref.watch(
+          studentUnreadUpdateCountProvider,
+        );
+
+    final updateBadgeText =
+        updateCount > 99
+            ? '99+'
+            : '$updateCount';
+
+    return PopScope(
+      canPop: _destination == AppDestination.home,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          return;
+        }
+
+        if (_destination != AppDestination.home) {
           setState(() {
-            _destination = AppDestination.values[index];
+            _destination = AppDestination.home;
+          });
+        }
+      },
+      child: Scaffold(
+      appBar: AppBar(
+        title: Text(
+          _titleForDestination(
+            _destination,
+          ),
+        ),
+      ),
+
+      body:
+          _bodyForDestination(
+        _destination,
+      ),
+
+      bottomNavigationBar:
+          NavigationBar(
+        selectedIndex:
+            selectedIndex,
+
+        onDestinationSelected:
+            (index) {
+          setState(() {
+            _destination =
+                AppDestination
+                    .values[index];
           });
         },
-        destinations: const [
+
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
+            icon: Icon(
+              Icons.home_outlined,
+            ),
+            selectedIcon:
+                Icon(
+              Icons.home,
+            ),
+            label:
+                'Home',
           ),
+
           NavigationDestination(
-            icon: Icon(Icons.school_outlined),
-            selectedIcon: Icon(Icons.school),
-            label: 'My Exams',
+            icon: Icon(
+              Icons.school_outlined,
+            ),
+            selectedIcon:
+                Icon(
+              Icons.school,
+            ),
+            label:
+                'My Exams',
           ),
+
           NavigationDestination(
-            icon: Icon(Icons.notifications_outlined),
-            selectedIcon: Icon(Icons.notifications),
-            label: 'Updates',
+            icon: Badge(
+              isLabelVisible:
+                  updateCount > 0,
+              label:
+                  Text(
+                updateBadgeText,
+              ),
+              child:
+                  const Icon(
+                Icons.notifications_outlined,
+              ),
+            ),
+            selectedIcon:
+                Badge(
+              isLabelVisible:
+                  updateCount > 0,
+              label:
+                  Text(
+                updateBadgeText,
+              ),
+              child:
+                  const Icon(
+                Icons.notifications,
+              ),
+            ),
+            label:
+                'Updates',
           ),
+
           NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'Profile',
+            icon: Icon(
+              Icons.person_outline,
+            ),
+            selectedIcon:
+                Icon(
+              Icons.person,
+            ),
+            label:
+                'Profile',
           ),
         ],
       ),
+    ),
     );
   }
 
-  Widget _bodyForDestination(AppDestination destination) {
+  Widget _bodyForDestination(
+    AppDestination destination,
+  ) {
     switch (destination) {
       case AppDestination.home:
-        return const _PlaceholderPage(
-          icon: Icons.home_rounded,
-          title: 'Home',
-          message: 'Your examination overview will appear here.',
+        return HomeDashboard(
+          onOpenMyExams:
+              () {
+            setState(() {
+              _destination =
+                  AppDestination
+                      .myExams;
+            });
+          },
+          onOpenUpdates:
+              () {
+            setState(() {
+              _destination =
+                  AppDestination
+                      .updates;
+            });
+          },
         );
 
       case AppDestination.myExams:
         return const MyExamsScreen();
 
       case AppDestination.updates:
-      return const UpdatesScreen();
+        return const UpdatesScreen();
 
       case AppDestination.profile:
         return ProfileScreen(
-        onSignOut: _signOut,
-      );
+          onSignOut:
+              _signOut,
+        );
     }
   }
 
   Future<void> _signOut() async {
     try {
-      await ref.read(authenticationRepositoryProvider).signOut();
+      await ref
+          .read(
+            authenticationRepositoryProvider,
+          )
+          .signOut();
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
         const SnackBar(
-          content: Text('Unable to sign out. Please try again.'),
+          content: Text(
+            'Unable to sign out. '
+            'Please try again.',
+          ),
         ),
       );
     }
   }
 
-  String _titleForDestination(AppDestination destination) {
+  String _titleForDestination(
+    AppDestination destination,
+  ) {
     switch (destination) {
       case AppDestination.home:
         return 'ExamReady';
+
       case AppDestination.myExams:
         return 'My Exams';
+
       case AppDestination.updates:
         return 'Updates';
+
       case AppDestination.profile:
         return 'Profile';
     }
   }
 }
-
-class _PlaceholderPage extends StatelessWidget {
-  const _PlaceholderPage({
-    required this.icon,
-    required this.title,
-    required this.message,
-  });
-
-  final IconData icon;
-  final String title;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 72,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 20),
-            Text(
-              title,
-              style: Theme.of(context)
-                  .textTheme
-                  .headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-

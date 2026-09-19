@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../sources/domain/official_source.dart';
 import '../application/update_providers.dart';
@@ -33,9 +34,12 @@ class UpdatesScreen extends ConsumerWidget {
         return ListView.separated(
           padding: const EdgeInsets.all(16),
           itemCount: items.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          separatorBuilder: (_, __) =>
+              const SizedBox(height: 10),
           itemBuilder: (context, index) {
-            return _UpdateCard(update: items[index]);
+            return _UpdateCard(
+              update: items[index],
+            );
           },
         );
       },
@@ -50,52 +54,196 @@ class _UpdateCard extends StatelessWidget {
 
   final ExaminationUpdate update;
 
+  bool get _hasOfficialNotice {
+    final url = update.noticeUrl;
+
+    if (url == null) {
+      return false;
+    }
+
+    final scheme = url.scheme.toLowerCase();
+
+    return scheme == 'https' || scheme == 'http';
+  }
+
+  Future<void> _openNotice(
+    BuildContext context,
+  ) async {
+    final url = update.noticeUrl;
+
+    if (url == null) {
+      return;
+    }
+
+    final opened = await launchUrl(
+      url,
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Unable to open the official notice.',
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final critical = update.severity == UpdateSeverity.critical;
+    final critical =
+        update.severity == UpdateSeverity.critical;
 
     return Card(
-      child: ListTile(
-        leading: CircleAvatar(
-          child: Icon(
-            critical
-                ? Icons.priority_high_rounded
-                : Icons.notifications_outlined,
-          ),
-        ),
-        title: Text(
-          update.title,
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Text(
-            '${_verificationLabel(update)}'
-            ' • ${_formatDate(update.publishedAt ?? update.detectedAt)}',
-          ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  child: Icon(
+                    critical
+                        ? Icons.priority_high_rounded
+                        : Icons.notifications_outlined,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    update.title,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+
+            Row(
+              children: [
+                Icon(
+                  update.verificationStatus ==
+                          VerificationStatus.verified
+                      ? Icons.verified_rounded
+                      : Icons.info_outline,
+                  size: 18,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${_verificationLabel(update)}'
+                    ' • '
+                    '${_formatDate(
+                      update.publishedAt ??
+                          update.detectedAt,
+                    )}',
+                  ),
+                ),
+              ],
+            ),
+
+            if (update.sourceName != null) ...[
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.account_balance_outlined,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Official source: '
+                      '${update.sourceName}',
+                    ),
+                  ),
+                ],
+              ),
+            ],
+
+            if (update.confidence != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Verification confidence: '
+                '${_confidencePercent(
+                  update.confidence!,
+                )}%',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall,
+              ),
+            ],
+
+            if (_hasOfficialNotice) ...[
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () =>
+                      _openNotice(context),
+                  icon: const Icon(
+                    Icons.open_in_new_rounded,
+                  ),
+                  label: const Text(
+                    'View Official Notice',
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
   }
 
-  String _verificationLabel(ExaminationUpdate update) {
+  String _verificationLabel(
+    ExaminationUpdate update,
+  ) {
     switch (update.verificationStatus) {
       case VerificationStatus.verified:
-        return 'Verified';
+        return 'Verified official update';
+
       case VerificationStatus.pendingVerification:
         return 'Pending verification';
+
       case VerificationStatus.updateDetected:
         return 'Update detected';
+
       case VerificationStatus.sourceUnavailable:
         return 'Source unavailable';
+
       case VerificationStatus.potentiallyOutdated:
         return 'Potentially outdated';
     }
   }
 
-  String _formatDate(DateTime date) {
+  int _confidencePercent(
+    double confidence,
+  ) {
+    final value =
+        confidence.clamp(0.0, 1.0);
+
+    return (value * 100).round();
+  }
+
+  String _formatDate(
+    DateTime date,
+  ) {
     const months = [
       'Jan',
       'Feb',
@@ -111,7 +259,9 @@ class _UpdateCard extends StatelessWidget {
       'Dec',
     ];
 
-    return '${date.day} ${months[date.month - 1]} ${date.year}';
+    return '${date.day} '
+        '${months[date.month - 1]} '
+        '${date.year}';
   }
 }
 
@@ -129,7 +279,8 @@ class _EmptyUpdates extends StatelessWidget {
             Icon(
               Icons.notifications_none_rounded,
               size: 72,
-              color: Theme.of(context).colorScheme.primary,
+              color:
+                  Theme.of(context).colorScheme.primary,
             ),
             const SizedBox(height: 20),
             Text(
@@ -137,12 +288,14 @@ class _EmptyUpdates extends StatelessWidget {
               style: Theme.of(context)
                   .textTheme
                   .headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.bold),
+                  ?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Verified updates for your selected examinations '
-              'will appear here.',
+              'Verified updates for your selected '
+              'examinations will appear here.',
               textAlign: TextAlign.center,
             ),
           ],

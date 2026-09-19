@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -13,7 +13,9 @@ class FirestoreExaminationUpdateRepository
   final FirebaseFirestore _firestore;
 
   @override
-  Stream<List<ExaminationUpdate>> watchForStudent(String userId) {
+  Stream<List<ExaminationUpdate>> watchForStudent(
+    String userId,
+  ) {
     final controller =
         StreamController<List<ExaminationUpdate>>();
 
@@ -37,7 +39,9 @@ class FirestoreExaminationUpdateRepository
         updatesSubscription?.cancel();
 
         if (cycleIds.isEmpty) {
-          controller.add(const <ExaminationUpdate>[]);
+          controller.add(
+            const <ExaminationUpdate>[],
+          );
           return;
         }
 
@@ -49,11 +53,13 @@ class FirestoreExaminationUpdateRepository
             final updates = updatesSnapshot.docs
                 .map(_fromDocument)
                 .where(
-                  (update) => cycleIds.contains(update.cycleId),
+                  (update) =>
+                      cycleIds.contains(update.cycleId),
                 )
                 .toList()
               ..sort(
-                (a, b) => b.detectedAt.compareTo(a.detectedAt),
+                (a, b) =>
+                    b.detectedAt.compareTo(a.detectedAt),
               );
 
             controller.add(updates);
@@ -79,18 +85,19 @@ class FirestoreExaminationUpdateRepository
 
     final detectedAt = data['detectedAt'];
     final publishedAt = data['publishedAt'];
-
     final rawSourceIds = data['sourceIds'];
 
     return ExaminationUpdate(
       id: document.id,
-      cycleId: data['cycleId'] as String,
-      title: data['title'] as String,
-      severity: UpdateSeverity.values.byName(
-        data['severity'] as String,
+      cycleId: data['cycleId'] as String? ?? '',
+      title: data['title'] as String? ??
+          'Official examination update',
+      severity: _parseSeverity(
+        data['severity'],
       ),
-      verificationStatus: VerificationStatus.values.byName(
-        data['verificationStatus'] as String,
+      verificationStatus:
+          _parseVerificationStatus(
+        data['verificationStatus'],
       ),
       sourceIds: rawSourceIds is List
           ? rawSourceIds.whereType<String>().toSet()
@@ -101,6 +108,93 @@ class FirestoreExaminationUpdateRepository
       publishedAt: publishedAt is Timestamp
           ? publishedAt.toDate()
           : null,
+      sourceName: _optionalString(
+        data['sourceName'],
+      ),
+      noticeUrl: _parseUri(
+        data['noticeUrl'],
+      ),
+      confidence: _parseDouble(
+        data['confidence'],
+      ),
     );
+  }
+
+  UpdateSeverity _parseSeverity(
+    Object? value,
+  ) {
+    if (value is String) {
+      for (final severity in UpdateSeverity.values) {
+        if (severity.name == value) {
+          return severity;
+        }
+      }
+    }
+
+    return UpdateSeverity.informational;
+  }
+
+  VerificationStatus _parseVerificationStatus(
+    Object? value,
+  ) {
+    if (value is String) {
+      for (final status in VerificationStatus.values) {
+        if (status.name == value) {
+          return status;
+        }
+      }
+    }
+
+    return VerificationStatus.pendingVerification;
+  }
+
+  String? _optionalString(
+    Object? value,
+  ) {
+    if (value is! String) {
+      return null;
+    }
+
+    final text = value.trim();
+
+    return text.isEmpty ? null : text;
+  }
+
+  Uri? _parseUri(
+    Object? value,
+  ) {
+    if (value is! String) {
+      return null;
+    }
+
+    final text = value.trim();
+
+    if (text.isEmpty) {
+      return null;
+    }
+
+    final uri = Uri.tryParse(text);
+
+    if (uri == null) {
+      return null;
+    }
+
+    final scheme = uri.scheme.toLowerCase();
+
+    if (scheme != 'https' && scheme != 'http') {
+      return null;
+    }
+
+    return uri;
+  }
+
+  double? _parseDouble(
+    Object? value,
+  ) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    return null;
   }
 }

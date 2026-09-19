@@ -1,4 +1,4 @@
-import '../../sources/domain/official_source.dart';
+﻿import '../../sources/domain/official_source.dart';
 
 enum UpdateSeverity { informational, critical }
 
@@ -12,6 +12,9 @@ class ExaminationUpdate {
     required this.sourceIds,
     required this.detectedAt,
     this.publishedAt,
+    this.sourceName,
+    this.noticeUrl,
+    this.confidence,
   });
 
   final String id;
@@ -22,4 +25,8 @@ class ExaminationUpdate {
   final Set<String> sourceIds;
   final DateTime detectedAt;
   final DateTime? publishedAt;
+
+  final String? sourceName;
+  final Uri? noticeUrl;
+  final double? confidence;
 }

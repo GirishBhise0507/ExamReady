@@ -30,12 +30,22 @@ const messaging = getMessaging();
 const NOTIFICATION_CHANNEL =
   "examready_alerts_v2";
 
+const MONITOR_SCHEMA_VERSION = 2;
+
+type SourceKind =
+  | "jeeMain"
+  | "neetUg"
+  | "cuetUg"
+  | "gate2027"
+  | "unsupported";
+
 type OfficialSourceData = {
   name?: string;
   url?: string;
   enabled?: boolean;
   type?: string;
   cycleIds?: string[];
+  monitorSchemaVersion?: number;
 };
 
 type NoticeEntry = {
@@ -51,36 +61,112 @@ type ClassifiedNotice = {
   autoPublish: boolean;
 };
 
-function normalizeText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+function normalizeText(
+  value: string,
+): string {
+  return value
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function noticeId(url: string): string {
+function searchableText(
+  value: string,
+): string {
+  return normalizeText(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " "),
+  );
+}
+
+function noticeId(
+  value: string,
+): string {
   return createHash("sha256")
-    .update(url)
+    .update(value)
     .digest("hex")
     .slice(0, 32);
+}
+
+function hostFromUrl(
+  value?: string,
+): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value)
+      .hostname
+      .toLowerCase()
+      .replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function sourceKind(
+  source: OfficialSourceData,
+): SourceKind {
+  const host =
+    hostFromUrl(source.url);
+
+  switch (host) {
+  case "jeemain.nta.nic.in":
+    return "jeeMain";
+
+  case "neet.nta.nic.in":
+    return "neetUg";
+
+  case "cuet.nta.nic.in":
+    return "cuetUg";
+
+  case "gate2027.iitm.ac.in":
+    return "gate2027";
+
+  default:
+    return "unsupported";
+  }
+}
+
+function isNtaKind(
+  kind: SourceKind,
+): boolean {
+  return (
+    kind === "jeeMain" ||
+    kind === "neetUg" ||
+    kind === "cuetUg"
+  );
 }
 
 async function fetchHtml(
   url: string,
 ): Promise<string> {
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 20000);
+  const timeout =
+    setTimeout(
+      () => {
+        controller.abort();
+      },
+      20000,
+    );
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "user-agent":
-          "ExamReady-OfficialSourceMonitor/1.0",
-      },
-    });
+    const response =
+      await fetch(
+        url,
+        {
+          method: "GET",
+          redirect: "follow",
+          signal: controller.signal,
+          headers: {
+            "user-agent":
+              "ExamReady-OfficialSourceMonitor/2.0",
+          },
+        },
+      );
 
     if (!response.ok) {
       throw new Error(
@@ -94,7 +180,44 @@ async function fetchHtml(
   }
 }
 
-function extractPublicNotices(
+function isAllowedNtaDocumentUrl(
+  target: URL,
+  sourcePageUrl: string,
+): boolean {
+  const targetHost =
+    target.hostname
+      .toLowerCase()
+      .replace(/^www\./, "");
+
+  const sourceHost =
+    hostFromUrl(sourcePageUrl);
+
+  if (!sourceHost) {
+    return false;
+  }
+
+  if (targetHost === sourceHost) {
+    return true;
+  }
+
+  if (
+    targetHost === "s3waas.gov.in" ||
+    targetHost.endsWith(".s3waas.gov.in")
+  ) {
+    return true;
+  }
+
+  if (
+    targetHost === "nta.ac.in" ||
+    targetHost.endsWith(".nta.ac.in")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractNtaPublicNotices(
   html: string,
   pageUrl: string,
 ): NoticeEntry[] {
@@ -103,83 +226,282 @@ function extractPublicNotices(
   const results =
     new Map<string, NoticeEntry>();
 
-  $("a").each((_, element) => {
-    const href = $(element).attr("href");
-
-    if (!href) {
-      return;
-    }
-
+  const addNotice = (
+    rawTitle: string,
+    rawUrl?: string,
+  ): void => {
     const title =
-      normalizeText($(element).text());
+      normalizeText(rawTitle);
 
-    if (!title) {
+    if (title.length < 8) {
       return;
     }
 
-    let absoluteUrl: URL;
+    let noticeUrl =
+      pageUrl;
 
-    try {
-      absoluteUrl = new URL(
-        href,
-        pageUrl,
-      );
-    } catch {
-      return;
+    if (rawUrl) {
+      try {
+        const target =
+          new URL(
+            rawUrl,
+            pageUrl,
+          );
+
+        if (
+          !isAllowedNtaDocumentUrl(
+            target,
+            pageUrl,
+          )
+        ) {
+          return;
+        }
+
+        noticeUrl =
+          target.toString();
+      } catch {
+        return;
+      }
     }
 
-    const host =
-      absoluteUrl.hostname.toLowerCase();
+    const identity =
+      noticeUrl === pageUrl ?
+        `${pageUrl}|${title}` :
+        noticeUrl;
 
-    const isOfficialDocument =
-      host.endsWith("nta.nic.in") ||
-      host.endsWith("s3waas.gov.in") ||
-      host.endsWith("nic.in");
+    const id =
+      noticeId(identity);
 
-    if (!isOfficialDocument) {
-      return;
-    }
-
-    const lowerTitle =
-      title.toLowerCase();
-
-    const looksLikeNotice =
-      lowerTitle.includes("jee") ||
-      lowerTitle.includes(
-        "joint entrance",
-      ) ||
-      lowerTitle.includes(
-        "admit card",
-      ) ||
-      lowerTitle.includes(
-        "answer key",
-      ) ||
-      lowerTitle.includes("result") ||
-      lowerTitle.includes(
-        "application",
-      ) ||
-      lowerTitle.includes(
-        "examination city",
-      ) ||
-      lowerTitle.includes(
-        "correction",
-      );
-
-    if (!looksLikeNotice) {
-      return;
-    }
-
-    const url = absoluteUrl.toString();
-    const id = noticeId(url);
-
-    results.set(id, {
+    results.set(
       id,
-      title,
-      url,
-    });
-  });
+      {
+        id,
+        title,
+        url: noticeUrl,
+      },
+    );
+  };
+
+  $("table tr").each(
+    (_, row) => {
+      const cells =
+        $(row).find("td");
+
+      if (cells.length === 0) {
+        return;
+      }
+
+      const title =
+        normalizeText(
+          $(cells[0]).text(),
+        );
+
+      let selectedUrl:
+        string | undefined;
+
+      $(row)
+        .find("a[href]")
+        .each(
+          (_, link) => {
+            if (selectedUrl) {
+              return;
+            }
+
+            const href =
+              $(link).attr("href");
+
+            if (!href) {
+              return;
+            }
+
+            try {
+              const target =
+                new URL(
+                  href,
+                  pageUrl,
+                );
+
+              if (
+                isAllowedNtaDocumentUrl(
+                  target,
+                  pageUrl,
+                )
+              ) {
+                selectedUrl =
+                  target.toString();
+              }
+            } catch {
+              // Ignore malformed links.
+            }
+          },
+        );
+
+      addNotice(
+        title,
+        selectedUrl,
+      );
+    },
+  );
+
+  if (results.size > 0) {
+    return [...results.values()];
+  }
+
+  /*
+   * Fallback for NTA pages whose current HTML
+   * does not expose notices as table rows.
+   */
+  $("a[href]").each(
+    (_, element) => {
+      const href =
+        $(element).attr("href");
+
+      if (!href) {
+        return;
+      }
+
+      let target: URL;
+
+      try {
+        target =
+          new URL(
+            href,
+            pageUrl,
+          );
+      } catch {
+        return;
+      }
+
+      if (
+        !isAllowedNtaDocumentUrl(
+          target,
+          pageUrl,
+        )
+      ) {
+        return;
+      }
+
+      const anchorText =
+        normalizeText(
+          $(element).text(),
+        );
+
+      const containerText =
+        normalizeText(
+          $(element)
+            .closest(
+              "li, article, tr, .document",
+            )
+            .text(),
+        );
+
+      const title =
+        anchorText.length >= 12 ?
+          anchorText :
+          containerText;
+
+      addNotice(
+        title,
+        target.toString(),
+      );
+    },
+  );
 
   return [...results.values()];
+}
+
+function extractGateNotifications(
+  html: string,
+  pageUrl: string,
+): NoticeEntry[] {
+  const $ = cheerio.load(html);
+
+  const results =
+    new Map<string, NoticeEntry>();
+
+  $("table tr").each(
+    (_, row) => {
+      const cells =
+        $(row).find("td");
+
+      if (cells.length < 2) {
+        return;
+      }
+
+      const dateText =
+        normalizeText(
+          $(cells[0]).text(),
+        );
+
+      const activityParts:
+        string[] = [];
+
+      cells
+        .slice(1)
+        .each(
+          (_, cell) => {
+            const value =
+              normalizeText(
+                $(cell).text(),
+              );
+
+            if (value) {
+              activityParts.push(
+                value,
+              );
+            }
+          },
+        );
+
+      const title =
+        normalizeText(
+          activityParts.join(" "),
+        );
+
+      if (!title) {
+        return;
+      }
+
+      const identity =
+        `${pageUrl}|${dateText}|${title}`;
+
+      const id =
+        noticeId(identity);
+
+      results.set(
+        id,
+        {
+          id,
+          title,
+          url: pageUrl,
+        },
+      );
+    },
+  );
+
+  return [...results.values()];
+}
+
+function extractNotices(
+  kind: SourceKind,
+  html: string,
+  pageUrl: string,
+): NoticeEntry[] {
+  if (isNtaKind(kind)) {
+    return extractNtaPublicNotices(
+      html,
+      pageUrl,
+    );
+  }
+
+  if (kind === "gate2027") {
+    return extractGateNotifications(
+      html,
+      pageUrl,
+    );
+  }
+
+  return [];
 }
 
 function cycleYear(
@@ -191,27 +513,205 @@ function cycleYear(
   return match?.[1] ?? null;
 }
 
+function yearsInTitle(
+  title: string,
+): Set<string> {
+  const matches =
+    title.match(/\b20\d{2}\b/g) ??
+    [];
+
+  return new Set(matches);
+}
+
+function titleMatchesExactYear(
+  title: string,
+  expectedYear: string,
+): boolean {
+  const years =
+    yearsInTitle(title);
+
+  return (
+    years.size === 1 &&
+    years.has(expectedYear)
+  );
+}
+
+function matchesExamIdentity(
+  kind: SourceKind,
+  title: string,
+): boolean {
+  const text =
+    searchableText(title);
+
+  switch (kind) {
+  case "jeeMain":
+    return (
+      (
+        text.includes("jee") &&
+          text.includes("main")
+      ) ||
+        (
+          text.includes(
+            "joint entrance examination",
+          ) &&
+          text.includes("main")
+        )
+    );
+
+  case "neetUg":
+    return (
+      text.includes("neet") ||
+        text.includes(
+          "national eligibility cum entrance test",
+        )
+    );
+
+  case "cuetUg":
+    return (
+      text.includes("cuet") ||
+        text.includes(
+          "common university entrance test",
+        )
+    );
+
+  case "gate2027":
+    /*
+       * GATE's notification page belongs only to
+       * the GATE 2027 official IIT Madras site.
+       * Individual activity rows often do not
+       * repeat the words "GATE 2027".
+       */
+    return true;
+
+  case "unsupported":
+    return false;
+  }
+}
+
+function gateSourceMatchesYear(
+  source: OfficialSourceData,
+  expectedYear: string,
+): boolean {
+  const host =
+    hostFromUrl(source.url);
+
+  if (!host) {
+    return false;
+  }
+
+  const match =
+    host.match(/^gate(\d{4})\.iitm\.ac\.in$/);
+
+  if (!match) {
+    return false;
+  }
+
+  return match[1] === expectedYear;
+}
+
 function noticeMatchesCycle(
   notice: NoticeEntry,
   cycleId: string,
+  kind: SourceKind,
+  source: OfficialSourceData,
 ): boolean {
-  const year = cycleYear(cycleId);
+  const year =
+    cycleYear(cycleId);
 
   if (!year) {
     return false;
   }
 
-  return notice.title.includes(year);
+  if (
+    !matchesExamIdentity(
+      kind,
+      notice.title,
+    )
+  ) {
+    return false;
+  }
+
+  if (kind === "gate2027") {
+    if (
+      !gateSourceMatchesYear(
+        source,
+        year,
+      )
+    ) {
+      return false;
+    }
+
+    const titleYears =
+      yearsInTitle(
+        notice.title,
+      );
+
+    /*
+     * A GATE activity may omit the year because
+     * the entire official site is cycle-specific.
+     * If a year IS written, however, it must
+     * match the selected cycle exactly.
+     */
+    return (
+      titleYears.size === 0 ||
+      (
+        titleYears.size === 1 &&
+        titleYears.has(year)
+      )
+    );
+  }
+
+  /*
+   * NTA sources are not cycle-specific URLs.
+   * Their notice title must identify exactly
+   * one year, and it must be our cycle year.
+   */
+  return titleMatchesExactYear(
+    notice.title,
+    year,
+  );
 }
 
 function classifyNotice(
   notice: NoticeEntry,
 ): ClassifiedNotice {
   const title =
-    notice.title.toLowerCase();
+    searchableText(
+      notice.title,
+    );
+
+  const hasAny = (
+    values: string[],
+  ): boolean => {
+    return values.some(
+      (value) =>
+        title.includes(value),
+    );
+  };
 
   if (
-    title.includes("admit card")
+    hasAny([
+      "rescheduled",
+      "rescheduling",
+      "postponed",
+      "postponement",
+      "date changed",
+      "dates changed",
+      "revised schedule",
+    ])
+  ) {
+    return {
+      category: "scheduleChange",
+      severity: "critical",
+      confidence: 0.99,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    title.includes(
+      "admit card",
+    )
   ) {
     return {
       category: "admitCard",
@@ -223,11 +723,14 @@ function classifyNotice(
 
   if (
     title.includes("result") &&
-    (
-      title.includes("declared") ||
-      title.includes("declaration") ||
-      title.includes("score")
-    )
+    hasAny([
+      "declared",
+      "declaration",
+      "score",
+      "scores",
+      "announcement",
+      "announced",
+    ])
   ) {
     return {
       category: "result",
@@ -238,7 +741,9 @@ function classifyNotice(
   }
 
   if (
-    title.includes("answer key")
+    title.includes(
+      "answer key",
+    )
   ) {
     return {
       category: "answerKey",
@@ -249,12 +754,11 @@ function classifyNotice(
   }
 
   if (
-    title.includes(
+    hasAny([
       "examination city",
-    ) ||
-    title.includes(
       "city intimation",
-    )
+      "city allotment",
+    ])
   ) {
     return {
       category:
@@ -267,10 +771,12 @@ function classifyNotice(
 
   if (
     title.includes("correction") &&
-    (
-      title.includes("window") ||
-      title.includes("facility")
-    )
+    hasAny([
+      "window",
+      "facility",
+      "particulars",
+      "application",
+    ])
   ) {
     return {
       category: "correctionWindow",
@@ -281,17 +787,87 @@ function classifyNotice(
   }
 
   if (
-    title.includes("application") &&
-    (
-      title.includes("extended") ||
-      title.includes("extension") ||
-      title.includes("deadline")
-    )
+    hasAny([
+      "application",
+      "registration",
+    ]) &&
+    hasAny([
+      "extended",
+      "extension",
+      "deadline",
+      "last date",
+      "closing date",
+      "closes",
+    ])
   ) {
     return {
       category: "applicationDeadline",
       severity: "critical",
       confidence: 0.99,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    (
+      title.includes("application") &&
+      hasAny([
+        "portal is live",
+        "application portal",
+        "inviting online application",
+        "application form open",
+      ])
+    ) ||
+    (
+      title.includes("registration") &&
+      hasAny([
+        "open",
+        "started",
+        "commenced",
+        "live",
+      ])
+    )
+  ) {
+    return {
+      category: "applicationOpened",
+      severity: "critical",
+      confidence: 0.98,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    hasAny([
+      "information bulletin",
+      "information brochure",
+    ]) &&
+    hasAny([
+      "released",
+      "release",
+      "revised",
+      "updated",
+    ])
+  ) {
+    return {
+      category: "informationBulletin",
+      severity: "informational",
+      confidence: 0.98,
+      autoPublish: true,
+    };
+  }
+
+  if (
+    title.includes("syllabus") &&
+    hasAny([
+      "released",
+      "revised",
+      "updated",
+    ])
+  ) {
+    return {
+      category: "syllabusUpdate",
+      severity: "informational",
+      confidence: 0.98,
       autoPublish: true,
     };
   }
@@ -311,13 +887,17 @@ async function publishVerifiedNotice(
   notice: NoticeEntry,
   cycleId: string,
   classification: ClassifiedNotice,
+  kind: SourceKind,
 ): Promise<void> {
   const updateId =
     `${sourceDocument.id}_${notice.id}`;
 
-  const updateRef = db
-    .collection("examinationUpdates")
-    .doc(updateId);
+  const updateRef =
+    db
+      .collection(
+        "examinationUpdates",
+      )
+      .doc(updateId);
 
   const existing =
     await updateRef.get();
@@ -360,16 +940,20 @@ async function publishVerifiedNotice(
     noticeUrl:
       notice.url,
 
+    sourceKind:
+      kind,
+
     detectedAt:
       FieldValue.serverTimestamp(),
 
     publishedAt:
       FieldValue.serverTimestamp(),
 
-    publishedAutomatically: true,
+    publishedAutomatically:
+      true,
 
     verificationMethod:
-      "officialSourceExactCycleYearAndKnownNoticeType",
+      "officialSourceExamIdentityCycleAndKnownNoticeType",
   });
 
   console.log(
@@ -377,23 +961,105 @@ async function publishVerifiedNotice(
   );
 }
 
+async function baselineSource(
+  sourceDocument:
+    QueryDocumentSnapshot,
+  notices: NoticeEntry[],
+): Promise<void> {
+  const seenCollection =
+    sourceDocument.ref.collection(
+      "seenNotices",
+    );
+
+  for (const notice of notices) {
+    await seenCollection
+      .doc(notice.id)
+      .set(
+        {
+          title:
+            notice.title,
+
+          url:
+            notice.url,
+
+          firstSeenAt:
+            FieldValue
+              .serverTimestamp(),
+
+          baseline: true,
+
+          monitorSchemaVersion:
+            MONITOR_SCHEMA_VERSION,
+        },
+        {
+          merge: true,
+        },
+      );
+  }
+
+  await sourceDocument.ref.set(
+    {
+      monitorSchemaVersion:
+        MONITOR_SCHEMA_VERSION,
+
+      lastCheckedAt:
+        FieldValue.serverTimestamp(),
+
+      status:
+        "verified",
+
+      processingStatus:
+        "processed",
+
+      noticeCount:
+        notices.length,
+    },
+    {
+      merge: true,
+    },
+  );
+
+  console.log(
+    `${sourceDocument.id}: baseline refreshed ` +
+    `with ${notices.length} notice(s).`,
+  );
+}
+
 async function monitorNoticeSource(
   sourceDocument:
     QueryDocumentSnapshot,
   source: OfficialSourceData,
+  kind: SourceKind,
 ): Promise<void> {
   if (!source.url) {
-    return;
+    throw new Error(
+      `${sourceDocument.id} has no URL.`,
+    );
   }
 
   const html =
-    await fetchHtml(source.url);
+    await fetchHtml(
+      source.url,
+    );
 
   const notices =
-    extractPublicNotices(
+    extractNotices(
+      kind,
       html,
       source.url,
     );
+
+  if (
+    source.monitorSchemaVersion !==
+    MONITOR_SCHEMA_VERSION
+  ) {
+    await baselineSource(
+      sourceDocument,
+      notices,
+    );
+
+    return;
+  }
 
   const seenCollection =
     sourceDocument.ref.collection(
@@ -403,36 +1069,45 @@ async function monitorNoticeSource(
   const seenSnapshot =
     await seenCollection.get();
 
-  const seenIds = new Set(
-    seenSnapshot.docs.map(
-      (document) => document.id,
-    ),
-  );
-
-  const isFirstRun =
-    seenSnapshot.empty;
+  const seenIds =
+    new Set(
+      seenSnapshot.docs.map(
+        (document) =>
+          document.id,
+      ),
+    );
 
   let relevantCount = 0;
   let autoPublishedCount = 0;
+  let reviewCount = 0;
 
   for (const notice of notices) {
-    if (seenIds.has(notice.id)) {
+    if (
+      seenIds.has(
+        notice.id,
+      )
+    ) {
       continue;
     }
 
     await seenCollection
       .doc(notice.id)
       .set({
-        title: notice.title,
-        url: notice.url,
-        firstSeenAt:
-          FieldValue.serverTimestamp(),
-        baseline: isFirstRun,
-      });
+        title:
+          notice.title,
 
-    if (isFirstRun) {
-      continue;
-    }
+        url:
+          notice.url,
+
+        firstSeenAt:
+          FieldValue
+            .serverTimestamp(),
+
+        baseline: false,
+
+        monitorSchemaVersion:
+          MONITOR_SCHEMA_VERSION,
+      });
 
     const matchedCycleIds =
       (source.cycleIds ?? [])
@@ -441,6 +1116,8 @@ async function monitorNoticeSource(
             noticeMatchesCycle(
               notice,
               cycleId,
+              kind,
+              source,
             ),
         );
 
@@ -448,7 +1125,8 @@ async function monitorNoticeSource(
       matchedCycleIds.length === 0
     ) {
       console.log(
-        `Ignoring notice for another cycle: ${notice.title}`,
+        "Ignoring notice that does not match " +
+        `this exam/cycle: ${notice.title}`,
       );
 
       continue;
@@ -457,21 +1135,23 @@ async function monitorNoticeSource(
     relevantCount++;
 
     const classification =
-      classifyNotice(notice);
+      classifyNotice(
+        notice,
+      );
 
     const detectionId =
       `${sourceDocument.id}_${notice.id}`;
 
-    const detectionRef = db
-      .collection(
-        "sourceDetections",
-      )
-      .doc(detectionId);
+    const detectionRef =
+      db
+        .collection(
+          "sourceDetections",
+        )
+        .doc(detectionId);
 
     if (
       classification.autoPublish &&
-      classification.confidence >=
-        0.97
+      classification.confidence >= 0.97
     ) {
       for (
         const cycleId
@@ -483,6 +1163,7 @@ async function monitorNoticeSource(
           notice,
           cycleId,
           classification,
+          kind,
         );
       }
 
@@ -497,6 +1178,9 @@ async function monitorNoticeSource(
 
           sourceUrl:
             source.url,
+
+          sourceKind:
+            kind,
 
           noticeTitle:
             notice.title,
@@ -525,9 +1209,15 @@ async function monitorNoticeSource(
             classification
               .category,
 
-          autoPublished: true,
+          autoPublished:
+            true,
+
+          verificationMethod:
+            "officialSourceExamIdentityCycleAndKnownNoticeType",
         },
-        {merge: true},
+        {
+          merge: true,
+        },
       );
 
       autoPublishedCount++;
@@ -546,6 +1236,9 @@ async function monitorNoticeSource(
 
         sourceUrl:
           source.url,
+
+        sourceKind:
+          kind,
 
         noticeTitle:
           notice.title,
@@ -572,10 +1265,15 @@ async function monitorNoticeSource(
         category:
           classification.category,
 
-        autoPublished: false,
+        autoPublished:
+          false,
       },
-      {merge: true},
+      {
+        merge: true,
+      },
     );
+
+    reviewCount++;
 
     console.log(
       `Held for review: ${notice.title}`,
@@ -587,35 +1285,70 @@ async function monitorNoticeSource(
       lastCheckedAt:
         FieldValue.serverTimestamp(),
 
-      status: "verified",
+      status:
+        "verified",
 
       processingStatus:
         "processed",
 
       noticeCount:
         notices.length,
+
+      monitorSchemaVersion:
+        MONITOR_SCHEMA_VERSION,
     },
-    {merge: true},
+    {
+      merge: true,
+    },
   );
 
   console.log(
     `${sourceDocument.id}: ` +
-      `${notices.length} notices, ` +
-      `${relevantCount} new relevant, ` +
-      `${autoPublishedCount} auto-published.`,
+    `${notices.length} notices, ` +
+    `${relevantCount} new relevant, ` +
+    `${autoPublishedCount} auto-published, ` +
+    `${reviewCount} held for review.`,
+  );
+}
+
+async function markUnsupportedSource(
+  sourceDocument:
+    QueryDocumentSnapshot,
+): Promise<void> {
+  await sourceDocument.ref.set(
+    {
+      lastCheckedAt:
+        FieldValue.serverTimestamp(),
+
+      status:
+        "pendingVerification",
+
+      processingStatus:
+        "needsReview",
+    },
+    {
+      merge: true,
+    },
+  );
+
+  console.log(
+    `${sourceDocument.id}: automatic parser not configured.`,
   );
 }
 
 async function monitorOfficialSources():
   Promise<void> {
-  const sources = await db
-    .collection("officialSources")
-    .where(
-      "enabled",
-      "==",
-      true,
-    )
-    .get();
+  const sources =
+    await db
+      .collection(
+        "officialSources",
+      )
+      .where(
+        "enabled",
+        "==",
+        true,
+      )
+      .get();
 
   console.log(
     `Checking ${sources.size} official source(s).`,
@@ -626,30 +1359,54 @@ async function monitorOfficialSources():
     of sources.docs
   ) {
     const source =
-      sourceDocument.data() as OfficialSourceData;
+      sourceDocument
+        .data() as OfficialSourceData;
 
     try {
       if (
         source.type ===
         "notification"
       ) {
+        const kind =
+          sourceKind(
+            source,
+          );
+
+        if (
+          kind === "unsupported"
+        ) {
+          await markUnsupportedSource(
+            sourceDocument,
+          );
+
+          continue;
+        }
+
         await monitorNoticeSource(
           sourceDocument,
           source,
+          kind,
         );
       } else {
+        /*
+         * Website-type sources are provenance/source
+         * records. They are not treated as notice feeds.
+         */
         await sourceDocument.ref.set(
           {
             lastCheckedAt:
               FieldValue
                 .serverTimestamp(),
 
-            status: "verified",
+            status:
+              "verified",
 
             processingStatus:
               "processed",
           },
-          {merge: true},
+          {
+            merge: true,
+          },
         );
       }
     } catch (error) {
@@ -670,7 +1427,9 @@ async function monitorOfficialSources():
           processingStatus:
             "failed",
         },
-        {merge: true},
+        {
+          merge: true,
+        },
       );
     }
   }
@@ -678,17 +1437,18 @@ async function monitorOfficialSources():
 
 async function notifyVerifiedUpdates():
   Promise<void> {
-  const updates = await db
-    .collection(
-      "examinationUpdates",
-    )
-    .where(
-      "verificationStatus",
-      "==",
-      "verified",
-    )
-    .limit(100)
-    .get();
+  const updates =
+    await db
+      .collection(
+        "examinationUpdates",
+      )
+      .where(
+        "verificationStatus",
+        "==",
+        "verified",
+      )
+      .limit(100)
+      .get();
 
   for (
     const updateDocument
@@ -721,15 +1481,19 @@ async function notifyVerifiedUpdates():
       continue;
     }
 
-    const users = await db
-      .collection("users")
-      .get();
+    const users =
+      await db
+        .collection(
+          "users",
+        )
+        .get();
 
     const tokens =
       new Set<string>();
 
     for (
-      const user of users.docs
+      const user
+      of users.docs
     ) {
       const selectedExam =
         await user.ref
@@ -756,7 +1520,8 @@ async function notifyVerifiedUpdates():
           .get();
 
       if (
-        preferences.data()
+        preferences
+          .data()
           ?.officialUpdatesEnabled ===
         false
       ) {
@@ -782,7 +1547,9 @@ async function notifyVerifiedUpdates():
               | undefined;
 
         if (token) {
-          tokens.add(token);
+          tokens.add(
+            token,
+          );
         }
       }
     }
@@ -801,8 +1568,7 @@ async function notifyVerifiedUpdates():
 
     for (
       let index = 0;
-      index <
-        allTokens.length;
+      index < allTokens.length;
       index += 500
     ) {
       const batch =
@@ -819,7 +1585,8 @@ async function notifyVerifiedUpdates():
 
       await messaging
         .sendEachForMulticast({
-          tokens: batch,
+          tokens:
+            batch,
 
           notification: {
             title,
@@ -837,7 +1604,8 @@ async function notifyVerifiedUpdates():
           },
 
           android: {
-            priority: "high",
+            priority:
+              "high",
 
             notification: {
               channelId:
@@ -856,12 +1624,14 @@ async function notifyVerifiedUpdates():
         notificationRecipientCount:
           allTokens.length,
       },
-      {merge: true},
+      {
+        merge: true,
+      },
     );
 
     console.log(
       `Processed ${updateDocument.id}: ` +
-        `${allTokens.length} recipient(s).`,
+      `${allTokens.length} recipient(s).`,
     );
   }
 }
@@ -881,11 +1651,13 @@ async function main():
   );
 }
 
-main().catch((error) => {
-  console.error(
-    "ExamReady automation failed:",
-    error,
-  );
+main().catch(
+  (error) => {
+    console.error(
+      "ExamReady automation failed:",
+      error,
+    );
 
-  process.exitCode = 1;
-});
+    process.exitCode = 1;
+  },
+);

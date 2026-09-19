@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../authentication/application/authentication_providers.dart';
+import '../../checklists/application/checklist_providers.dart';
+import '../../checklists/domain/checklist.dart';
 import '../../examinations/application/examination_providers.dart';
 import '../../examinations/domain/examination_information.dart';
 import '../../updates/application/update_providers.dart';
@@ -29,6 +32,12 @@ class HomeDashboard extends ConsumerWidget {
           studentUnreadUpdateCountProvider,
         );
 
+    final authSession =
+        ref.watch(authSessionProvider).valueOrNull;
+
+    final userId =
+        authSession?.userId;
+
     return selected.when(
       loading: () => const Center(
         child: CircularProgressIndicator(),
@@ -54,6 +63,11 @@ class HomeDashboard extends ConsumerWidget {
         final examPreviews =
             <_ExamPreview>[];
 
+        var totalChecklistRequirements = 0;
+        var completedChecklistRequirements = 0;
+        var checklistDataLoading = false;
+        var checklistDataError = false;
+
         for (final selectedExam in examinations) {
           final examAsync = ref.watch(
             examinationProvider(
@@ -77,6 +91,62 @@ class HomeDashboard extends ConsumerWidget {
               selectedExam.cycleId,
             ),
           );
+
+          final requirementsAsync = ref.watch(
+            checklistRequirementsProvider(
+              selectedExam.cycleId,
+            ),
+          );
+
+          final studentChecklistAsync =
+              userId == null
+                  ? null
+                  : ref.watch(
+                      studentChecklistProvider(
+                        (
+                          userId: userId,
+                          cycleId: selectedExam.cycleId,
+                        ),
+                      ),
+                    );
+
+          if (requirementsAsync.hasError ||
+              (studentChecklistAsync?.hasError ?? false)) {
+            checklistDataError = true;
+          }
+
+          final requirements =
+              requirementsAsync.valueOrNull;
+
+          final studentItems =
+              studentChecklistAsync?.valueOrNull;
+
+          if (requirements == null ||
+              (userId != null && studentItems == null)) {
+            checklistDataLoading = true;
+          } else {
+            final currentStudentItems =
+                studentItems ??
+                const <StudentChecklistItem>[];
+
+            final statusByRequirement = {
+              for (final item in currentStudentItems)
+                item.requirementId: item.status,
+            };
+
+            totalChecklistRequirements +=
+                requirements.length;
+
+            completedChecklistRequirements +=
+                requirements
+                    .where(
+                      (requirement) =>
+                          statusByRequirement[
+                              requirement.id] ==
+                          ChecklistItemStatus.completed,
+                    )
+                    .length;
+          }
 
           final exam =
               examAsync.valueOrNull;
@@ -332,62 +402,17 @@ class HomeDashboard extends ConsumerWidget {
 
               const SizedBox(height: 24),
 
-              Card(
-                child: InkWell(
-                  onTap:
-                      onOpenMyExams,
-                  borderRadius:
-                      BorderRadius.circular(
-                    12,
-                  ),
-                  child: const Padding(
-                    padding:
-                        EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          child: Icon(
-                            Icons
-                                .checklist_rounded,
-                          ),
-                        ),
-                        SizedBox(
-                          width: 14,
-                        ),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment:
-                                CrossAxisAlignment
-                                    .start,
-                            children: [
-                              Text(
-                                'Document Checklists',
-                                style:
-                                    TextStyle(
-                                  fontWeight:
-                                      FontWeight.bold,
-                                  fontSize:
-                                      16,
-                                ),
-                              ),
-                              SizedBox(
-                                height: 4,
-                              ),
-                              Text(
-                                'Open an exam to review '
-                                'and track required documents.',
-                              ),
-                            ],
-                          ),
-                        ),
-                        Icon(
-                          Icons
-                              .chevron_right_rounded,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+              _ChecklistProgressCard(
+                completed:
+                    completedChecklistRequirements,
+                total:
+                    totalChecklistRequirements,
+                isLoading:
+                    checklistDataLoading,
+                hasError:
+                    checklistDataError,
+                onTap:
+                    onOpenMyExams,
               ),
 
               const SizedBox(height: 24),
@@ -983,6 +1008,130 @@ class _EmptyHome extends StatelessWidget {
   }
 }
 
+class _ChecklistProgressCard extends StatelessWidget {
+  const _ChecklistProgressCard({
+    required this.completed,
+    required this.total,
+    required this.isLoading,
+    required this.hasError,
+    required this.onTap,
+  });
+
+  final int completed;
+  final int total;
+  final bool isLoading;
+  final bool hasError;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress =
+        total == 0
+            ? 0.0
+            : completed / total;
+
+    final percent =
+        (progress * 100).round();
+
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius:
+            BorderRadius.circular(12),
+        child: Padding(
+          padding:
+              const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: [
+              const CircleAvatar(
+                child: Icon(
+                  Icons.checklist_rounded,
+                ),
+              ),
+
+              const SizedBox(width: 14),
+
+              Expanded(
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Checklist Progress',
+                      style:
+                          Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(
+                                fontWeight:
+                                    FontWeight.bold,
+                              ),
+                    ),
+
+                    const SizedBox(height: 6),
+
+                    if (isLoading &&
+                        total == 0)
+                      const Text(
+                        'Loading your checklist progress...',
+                      )
+                    else if (hasError &&
+                        total == 0)
+                      const Text(
+                        'Checklist progress is temporarily unavailable.',
+                      )
+                    else if (total == 0)
+                      const Text(
+                        'No verified checklist requirements '
+                        'are available for your selected exams yet.',
+                      )
+                    else ...[
+                      Text(
+                        '$completed of $total completed',
+                        style:
+                            Theme.of(context)
+                                .textTheme
+                                .bodyLarge
+                                ?.copyWith(
+                                  fontWeight:
+                                      FontWeight.w600,
+                                ),
+                      ),
+
+                      const SizedBox(height: 10),
+
+                      LinearProgressIndicator(
+                        value: progress,
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      Text(
+                        '$percent% complete',
+                        style:
+                            Theme.of(context)
+                                .textTheme
+                                .bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              const SizedBox(width: 8),
+
+              const Icon(
+                Icons.chevron_right_rounded,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 class _UpcomingExamDate {
   const _UpcomingExamDate({
     required this.examName,
@@ -1078,19 +1227,19 @@ String _cleanText(
 ) {
   return value
       .replaceAll(
+        'Ã¢â‚¬â€',
         'â€”',
-        '—',
       )
       .replaceAll(
+        'Ã¢â‚¬â€œ',
         'â€“',
-        '–',
       )
       .replaceAll(
+        'Ã¢â‚¬â„¢',
         'â€™',
-        '’',
       )
       .replaceAll(
-        'Â',
+        'Ã‚',
         '',
       )
       .replaceAll(

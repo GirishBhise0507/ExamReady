@@ -1,0 +1,39 @@
+# Flutter/Dart build output
+.dart_tool/
+build/
+
+# Local tool installations and generated Firebase configuration
+.tooling/
+flutter_sdk.zip
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Firebase / backend generated files
+functions/node_modules/
+functions/lib/
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firepit-log.txt
+
+# Secrets / service-account credentials
+*service-account*.json
+*service_account*.json
+firebase-adminsdk-*.json
+credentials.json
+.env
+.env.*
+!.env.example
+
+# Node/npm local files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

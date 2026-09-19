@@ -1,0 +1,70 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Private data belonging to an individual authenticated user.
+    match /users/{userId} {
+      allow read, create, update, delete:
+        if request.auth != null && request.auth.uid == userId;
+
+      match /{document=**} {
+        allow read, write:
+          if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // Master examination data.
+    // Signed-in users may read it, but client apps cannot modify it.
+    match /examinationCategories/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /examinations/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /examinationCycles/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /examinationInformation/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /officialSources/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Master checklist requirements.
+    match /checklistRequirements/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+
+
+    // Internal automatic source-monitoring detections.
+    // These may contain unverified changes and are never exposed
+    // directly to client applications.
+    match /sourceDetections/{document=**} {
+      allow read, write: if false;
+    }
+    // Verified/master examination update records.
+    match /examinationUpdates/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    // Everything else remains blocked.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+

@@ -32,6 +32,12 @@ class HomeDashboard extends ConsumerWidget {
           studentUnreadUpdateCountProvider,
         );
 
+    final readUpdateIds =
+        ref.watch(
+          studentReadUpdateIdsProvider,
+        ).valueOrNull ??
+        const <String>{};
+
     final authSession =
         ref.watch(authSessionProvider).valueOrNull;
 
@@ -347,9 +353,16 @@ class HomeDashboard extends ConsumerWidget {
                     );
                   }
 
+                  final latestUpdate =
+                      items.first;
+
                   return _LatestUpdateCard(
                     update:
-                        items.first,
+                        latestUpdate,
+                    isRead:
+                        readUpdateIds.contains(
+                      latestUpdate.id,
+                    ),
                     onTap:
                         onOpenUpdates,
                   );
@@ -752,10 +765,12 @@ class _LatestUpdateCard
     extends StatelessWidget {
   const _LatestUpdateCard({
     required this.update,
+    required this.isRead,
     required this.onTap,
   });
 
   final ExaminationUpdate update;
+  final bool isRead;
   final VoidCallback onTap;
 
   @override
@@ -765,6 +780,8 @@ class _LatestUpdateCard
         UpdateSeverity.critical;
 
     return Card(
+      elevation:
+          isRead ? 0 : null,
       child: InkWell(
         onTap:
             onTap,
@@ -802,8 +819,9 @@ class _LatestUpdateCard
                               .titleMedium
                               ?.copyWith(
                                 fontWeight:
-                                    FontWeight
-                                        .bold,
+                                    isRead
+                                        ? FontWeight.w500
+                                        : FontWeight.bold,
                               ),
                     ),
                     const SizedBox(
@@ -827,6 +845,58 @@ class _LatestUpdateCard
                           Theme.of(context)
                               .textTheme
                               .bodySmall,
+                    ),
+
+                    const SizedBox(
+                      height: 6,
+                    ),
+
+                    Row(
+                      mainAxisSize:
+                          MainAxisSize.min,
+                      children: [
+                        if (!isRead) ...[
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration:
+                                BoxDecoration(
+                              color:
+                                  Theme.of(context)
+                                      .colorScheme
+                                      .primary,
+                              shape:
+                                  BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(
+                            width: 6,
+                          ),
+                        ],
+                        Text(
+                          isRead
+                              ? 'Read'
+                              : 'Unread',
+                          style:
+                              Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                    color:
+                                        isRead
+                                            ? Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                    fontWeight:
+                                        isRead
+                                            ? FontWeight.normal
+                                            : FontWeight.bold,
+                                  ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1227,19 +1297,19 @@ String _cleanText(
 ) {
   return value
       .replaceAll(
-        'Ã¢â‚¬â€',
-        'â€”',
+        'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â',
+        'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â',
       )
       .replaceAll(
-        'Ã¢â‚¬â€œ',
-        'â€“',
+        'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ',
+        'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“',
       )
       .replaceAll(
-        'Ã¢â‚¬â„¢',
-        'â€™',
+        'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢',
+        'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢',
       )
       .replaceAll(
-        'Ã‚',
+        'ÃƒÆ’Ã¢â‚¬Å¡',
         '',
       )
       .replaceAll(

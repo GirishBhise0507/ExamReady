@@ -30,17 +30,72 @@ class ExaminationDetailsScreen extends ConsumerWidget {
     final sources =
         ref.watch(officialSourcesForCycleProvider(cycleId));
 
+    Future<void> refreshDetails() async {
+      ref.invalidate(
+        examinationInformationProvider(cycleId),
+      );
+
+      ref.invalidate(
+        officialSourcesForCycleProvider(cycleId),
+      );
+
+      try {
+        await ref.read(
+          examinationInformationProvider(cycleId).future,
+        );
+      } catch (_) {
+        // The error state remains visible if reloading fails.
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(examination.name),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: refreshDetails,
+            icon: const Icon(
+              Icons.refresh_rounded,
+            ),
+          ),
+        ],
       ),
       body: information.when(
         loading: () => const Center(
           child: CircularProgressIndicator(),
         ),
-        error: (error, stackTrace) => const Center(
-          child: Text(
-            'Unable to load examination information.',
+        error: (error, stackTrace) => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.cloud_off_rounded,
+                  size: 64,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Unable to load examination information.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Please check your connection and try again.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                FilledButton.icon(
+                  onPressed: refreshDetails,
+                  icon: const Icon(
+                    Icons.refresh_rounded,
+                  ),
+                  label: const Text('Retry'),
+                ),
+              ],
+            ),
           ),
         ),
         data: (examInformation) {

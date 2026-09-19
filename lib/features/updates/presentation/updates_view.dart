@@ -10,142 +10,150 @@ import '../domain/examination_update.dart';
 class UpdatesScreen extends ConsumerWidget {
   const UpdatesScreen({super.key});
 
+  Future<void> _refresh(
+    WidgetRef ref,
+  ) async {
+    ref.invalidate(
+      studentUpdatesProvider,
+    );
+
+    ref.invalidate(
+      studentReadUpdateIdsProvider,
+    );
+
+    try {
+      await ref.read(
+        studentUpdatesProvider.future,
+      );
+    } catch (_) {
+      // The screen will show the error state.
+    }
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(
+    BuildContext context,
+    WidgetRef ref,
+  ) {
     final updates =
         ref.watch(studentUpdatesProvider);
 
     final readIds =
-        ref.watch(studentReadUpdateIdsProvider);
+        ref.watch(
+      studentReadUpdateIdsProvider,
+    );
 
     return updates.when(
       loading: () => const Center(
         child: CircularProgressIndicator(),
       ),
-      error: (error, stackTrace) => const Center(
+
+      error: (error, stackTrace) =>
+          Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'Unable to load examination updates.',
-            textAlign: TextAlign.center,
+          padding:
+              const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize:
+                MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons
+                    .error_outline_rounded,
+                size: 64,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Unable to load examination updates.',
+                textAlign:
+                    TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed:
+                    () => _refresh(ref),
+                icon:
+                    const Icon(
+                  Icons.refresh_rounded,
+                ),
+                label:
+                    const Text(
+                  'Retry',
+                ),
+              ),
+            ],
           ),
         ),
       ),
-      data: (items) {
-        if (items.isEmpty) {
-          return const _EmptyUpdates();
-        }
 
+      data: (items) {
         final currentReadIds =
             readIds.valueOrNull ??
             const <String>{};
 
-        return ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: items.length,
-          separatorBuilder: (_, __) =>
-              const SizedBox(height: 10),
-          itemBuilder: (context, index) {
-            final update =
-                items[index];
+        if (items.isEmpty) {
+          return RefreshIndicator(
+            onRefresh:
+                () => _refresh(ref),
+            child: ListView(
+              physics:
+                  const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(
+                  height:
+                      MediaQuery.sizeOf(
+                            context,
+                          ).height *
+                          0.65,
+                  child:
+                      const _EmptyUpdates(),
+                ),
+              ],
+            ),
+          );
+        }
 
-            final isRead =
-                currentReadIds.contains(
-              update.id,
-            );
+        return RefreshIndicator(
+          onRefresh:
+              () => _refresh(ref),
+          child: ListView.separated(
+            physics:
+                const AlwaysScrollableScrollPhysics(),
+            padding:
+                const EdgeInsets.all(16),
+            itemCount:
+                items.length,
+            separatorBuilder:
+                (_, __) =>
+                    const SizedBox(
+              height: 10,
+            ),
+            itemBuilder:
+                (context, index) {
+              final update =
+                  items[index];
 
-            Future<void> markRead() async {
-              if (isRead) {
-                return;
-              }
+              final isRead =
+                  currentReadIds.contains(
+                update.id,
+              );
 
-              final session = ref
-                  .read(authSessionProvider)
-                  .valueOrNull;
-
-              final userId =
-                  session?.userId;
-
-              if (userId == null) {
-                return;
-              }
-
-              try {
-                await ref
-                    .read(
-                      examinationUpdateRepositoryProvider,
-                    )
-                    .markUpdateRead(
-                      userId: userId,
-                      updateId: update.id,
-                    );
-              } catch (_) {
-                if (!context.mounted) {
+              Future<void> markRead() async {
+                if (isRead) {
                   return;
                 }
 
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Unable to mark update as read.',
-                    ),
-                  ),
-                );
-              }
-            }
-
-            return Dismissible(
-              key: ValueKey(update.id),
-              direction:
-                  DismissDirection.endToStart,
-              background: Container(
-                alignment:
-                    Alignment.centerRight,
-                padding:
-                    const EdgeInsets.symmetric(
-                  horizontal: 24,
-                ),
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .primaryContainer,
-                  borderRadius:
-                      BorderRadius.circular(12),
-                ),
-                child: const Column(
-                  mainAxisAlignment:
-                      MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.done_rounded,
-                    ),
-                    SizedBox(height: 4),
-                    Text('Dismiss'),
-                  ],
-                ),
-              ),
-              confirmDismiss: (_) async {
                 final session = ref
-                    .read(authSessionProvider)
+                    .read(
+                      authSessionProvider,
+                    )
                     .valueOrNull;
 
                 final userId =
                     session?.userId;
 
                 if (userId == null) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Please sign in again.',
-                        ),
-                      ),
-                    );
-                  }
-
-                  return false;
+                  return;
                 }
 
                 try {
@@ -153,51 +161,156 @@ class UpdatesScreen extends ConsumerWidget {
                       .read(
                         examinationUpdateRepositoryProvider,
                       )
-                      .dismissUpdate(
+                      .markUpdateRead(
                         userId: userId,
                         updateId: update.id,
                       );
-
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Update dismissed.',
-                        ),
-                      ),
-                    );
-                  }
-
-                  return true;
                 } catch (_) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Unable to dismiss the update.',
-                        ),
-                      ),
-                    );
+                  if (!context.mounted) {
+                    return;
                   }
 
-                  return false;
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Unable to mark update as read.',
+                      ),
+                    ),
+                  );
                 }
-              },
-              child: _UpdateCard(
-                update: update,
-                isRead: isRead,
-                onMarkRead: markRead,
-              ),
-            );
-          },
+              }
+
+              return Dismissible(
+                key:
+                    ValueKey(update.id),
+                direction:
+                    DismissDirection
+                        .endToStart,
+
+                background:
+                    Container(
+                  alignment:
+                      Alignment.centerRight,
+                  padding:
+                      const EdgeInsets
+                          .symmetric(
+                    horizontal: 24,
+                  ),
+                  decoration:
+                      BoxDecoration(
+                    color:
+                        Theme.of(context)
+                            .colorScheme
+                            .primaryContainer,
+                    borderRadius:
+                        BorderRadius
+                            .circular(
+                      12,
+                    ),
+                  ),
+                  child:
+                      const Column(
+                    mainAxisAlignment:
+                        MainAxisAlignment
+                            .center,
+                    children: [
+                      Icon(
+                        Icons.done_rounded,
+                      ),
+                      SizedBox(height: 4),
+                      Text('Dismiss'),
+                    ],
+                  ),
+                ),
+
+                confirmDismiss:
+                    (_) async {
+                  final session = ref
+                      .read(
+                        authSessionProvider,
+                      )
+                      .valueOrNull;
+
+                  final userId =
+                      session?.userId;
+
+                  if (userId == null) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Please sign in again.',
+                          ),
+                        ),
+                      );
+                    }
+
+                    return false;
+                  }
+
+                  try {
+                    await ref
+                        .read(
+                          examinationUpdateRepositoryProvider,
+                        )
+                        .dismissUpdate(
+                          userId:
+                              userId,
+                          updateId:
+                              update.id,
+                        );
+
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Update dismissed.',
+                          ),
+                        ),
+                      );
+                    }
+
+                    return true;
+                  } catch (_) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Unable to dismiss the update.',
+                          ),
+                        ),
+                      );
+                    }
+
+                    return false;
+                  }
+                },
+
+                child:
+                    _UpdateCard(
+                  update:
+                      update,
+                  isRead:
+                      isRead,
+                  onMarkRead:
+                      markRead,
+                ),
+              );
+            },
+          ),
         );
       },
     );
   }
 }
-
 class _UpdateCard extends StatelessWidget {
   const _UpdateCard({
     required this.update,
@@ -353,7 +466,7 @@ class _UpdateCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       '${_verificationLabel(update)}'
-                      ' • '
+                      ' â€¢ '
                       '${_formatDate(
                         update.publishedAt ??
                             update.detectedAt,

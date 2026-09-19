@@ -139,47 +139,96 @@ function isNtaKind(
   );
 }
 
+function sleep(
+  milliseconds: number,
+): Promise<void> {
+  return new Promise(
+    (resolve) => {
+      setTimeout(
+        resolve,
+        milliseconds,
+      );
+    },
+  );
+}
+
 async function fetchHtml(
   url: string,
 ): Promise<string> {
-  const controller =
-    new AbortController();
+  const maximumAttempts = 3;
 
-  const timeout =
-    setTimeout(
-      () => {
-        controller.abort();
-      },
-      20000,
-    );
+  let lastError: unknown;
 
-  try {
-    const response =
-      await fetch(
-        url,
-        {
-          method: "GET",
-          redirect: "follow",
-          signal: controller.signal,
-          headers: {
-            "user-agent":
-              "ExamReady-OfficialSourceMonitor/2.0",
-          },
+  for (
+    let attempt = 1;
+    attempt <= maximumAttempts;
+    attempt++
+  ) {
+    const controller =
+      new AbortController();
+
+    const timeout =
+      setTimeout(
+        () => {
+          controller.abort();
         },
+        25000,
       );
 
-    if (!response.ok) {
-      throw new Error(
-        `HTTP ${response.status} while checking ${url}`,
+    try {
+      const response =
+        await fetch(
+          url,
+          {
+            method: "GET",
+            redirect: "follow",
+            signal: controller.signal,
+            headers: {
+              "user-agent":
+                "ExamReady-OfficialSourceMonitor/2.0",
+            },
+          },
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status} while checking ${url}`,
+        );
+      }
+
+      return await response.text();
+    } catch (error) {
+      lastError = error;
+
+      if (
+        attempt >= maximumAttempts
+      ) {
+        break;
+      }
+
+      console.warn(
+        `Fetch attempt ${attempt}/${maximumAttempts} ` +
+        `failed for ${url}. Retrying...`,
+      );
+
+      await sleep(
+        attempt * 3000,
+      );
+    } finally {
+      clearTimeout(
+        timeout,
       );
     }
-
-    return await response.text();
-  } finally {
-    clearTimeout(timeout);
   }
-}
 
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+
+  throw new Error(
+    `Unable to fetch ${url}`,
+  );
+}
 function isAllowedNtaDocumentUrl(
   target: URL,
   sourcePageUrl: string,
